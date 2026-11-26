@@ -170,7 +170,13 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         engine.advancedSettings = _advancedSettings.value
         _mixerState.update { it.copy(qualityMode = _advancedSettings.value.defaultQuality) }
         refreshCacheSize()
-    }
+        viewModelScope.launch {
+            engine.playbackError.collect { message ->
+                if (!message.isNullOrBlank()) {
+                    _snackbarMessages.emit("שגיאה בהשמעה: $message")
+                }
+            }
+        }
 
     fun selectTab(tab: StudioTab) {
         _selectedTab.value = tab
