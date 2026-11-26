@@ -423,7 +423,7 @@ class AudioEngineController {
         while (written < sIdx) {
             val count = track.write(shortScratch, written, sIdx - written)
             if (count < 0) error("שגיאה בהעברת נתוני שמע לרמקול (קוד $count)")
-            if (count == 0) continue
+            if (count == 0) error("הנגן לא קיבל נתוני שמע")
             written += count
         }
     }
