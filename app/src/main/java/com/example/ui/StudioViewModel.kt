@@ -184,6 +184,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
         }
+    }
 
     fun selectTab(tab: StudioTab) {
         _selectedTab.value = tab
