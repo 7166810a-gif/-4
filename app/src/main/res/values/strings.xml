@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">סטודיו אודיו</string>
+    <string name="cd_hero_banner">תמונת אווירה של אולפן הקלטות</string>
+    <string name="cd_play_pause">נגן או השהה</string>
+    <string name="cd_stop">עצור נגינה</string>
+    <string name="cd_import_audio">ייבוא קובץ שמע</string>
+    <string name="cd_export_audio">ייצוא פלייבק</string>
+    <string name="cd_record_overdub">הקלטה על גבי הפלייבק</string>
+    <string name="cd_undo">בטל פעולה</string>
+    <string name="cd_redo">בצע שוב</string>
+</resources>

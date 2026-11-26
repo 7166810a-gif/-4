@@ -1,0 +1,6 @@
+{
+  "name": "סטודיו אודיו",
+  "description": "אולפן סאונד מקצועי ויצירת פלייבקים 100% באופליין: הפרדת ערוצים חכמה, שינוי סולם ומהירות בזמן אמת, עורך גל קול, אקולייזר, אפקטים והקלטת אוברדאב.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
