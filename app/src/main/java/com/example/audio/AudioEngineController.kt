@@ -523,10 +523,10 @@ class AudioEngineController {
             for (k in 0 until fade) {
                 val w = k.toFloat() / fade
                 val idx = start - fade / 2 + k
-                if (idx in out.indices && start + k < arr.size && end - fade + k >= 0) {
-                    val a = arr[start - fade + k]
-                    val b = arr[end + k]
-                    out[idx] = a * (1f - w) + b * w
+                val srcA = start - fade + k
+                val srcB = end + k
+                if (idx in out.indices && srcA in arr.indices && srcB in arr.indices) {
+                    out[idx] = arr[srcA] * (1f - w) + arr[srcB] * w
                 }
             }
             return out

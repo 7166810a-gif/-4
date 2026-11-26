@@ -42,12 +42,11 @@ import java.io.File
 import java.util.UUID
 
 class StudioViewModel(application: Application) : AndroidViewModel(application) {
-    private val context = application.applicationContext
-    private val repository = TrackRepository(StudioDatabase.getInstance(context).trackDao())
+    private val repository = TrackRepository(StudioDatabase.getInstance(application).trackDao())
     private val engine = AudioEngineController()
 
-    private val studioDir = File(context.filesDir, "studio_audio").apply { mkdirs() }
-    private val exportDir = File(context.filesDir, "studio_exports").apply { mkdirs() }
+    private val studioDir = File(application.filesDir, "studio_audio").apply { mkdirs() }
+    private val exportDir = File(application.filesDir, "studio_exports").apply { mkdirs() }
 
     private val _selectedTab = MutableStateFlow(StudioTab.LIBRARY)
     val selectedTab: StateFlow<StudioTab> = _selectedTab.asStateFlow()
@@ -175,13 +174,14 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             _processing.value = ProcessingProgress(true, "מפענח ומייבא קובץ שמע...", 0.15f)
             try {
-                val rawName = AudioDecoder.getDisplayName(context, uri)
+                val appCtx = getApplication<Application>()
+                val rawName = AudioDecoder.getDisplayName(appCtx, uri)
                 val ext = rawName.substringAfterLast('.', "AUDIO").uppercase()
                 val title = rawName.substringBeforeLast('.').ifBlank { "רצועה חדשה" }
                 val internalWav = File(studioDir, "track_${UUID.randomUUID()}.wav")
 
                 _processing.value = ProcessingProgress(true, "ממיר לפורמט אולפן (44.1kHz)...", 0.45f)
-                val buffer = AudioDecoder.decodeUriToFileAndBuffer(context, uri, internalWav)
+                val buffer = AudioDecoder.decodeUriToFileAndBuffer(appCtx, uri, internalWav)
 
                 val entity = TrackEntity(
                     title = title,
@@ -714,7 +714,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 val safeName = fileName.trim().ifBlank { "playback_export" }
                 val archiveFile = File(exportDir, "${safeName}_${System.currentTimeMillis()}.${format.extension}")
                 val rendered = AudioExporter.renderAndExport(
-                    context = context,
+                    context = getApplication<Application>(),
                     sourceBuffer = buf,
                     stems = engine.currentStems,
                     overdubBuffer = engine.overdubBuffer,

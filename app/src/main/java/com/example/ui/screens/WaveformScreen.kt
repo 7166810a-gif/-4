@@ -18,13 +18,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.MergeType
 import androidx.compose.material.icons.automirrored.rounded.Redo
+import androidx.compose.material.icons.automirrored.rounded.TrendingDown
+import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.Crop
-import androidx.compose.material.icons.rounded.MergeType
-import androidx.compose.material.icons.rounded.TrendingDown
-import androidx.compose.material.icons.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.ZoomIn
 import androidx.compose.material.icons.rounded.ZoomOut
 import androidx.compose.material3.AlertDialog
@@ -278,7 +278,7 @@ fun WaveformScreen(
                     modifier = Modifier.weight(1f).minimumInteractiveComponentSize().testTag("waveform_fadein_button"),
                     shape = RoundedCornerShape(14.dp)
                 ) {
-                    Icon(Icons.Rounded.TrendingUp, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.AutoMirrored.Rounded.TrendingUp, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("Fade In")
                 }
@@ -287,7 +287,7 @@ fun WaveformScreen(
                     modifier = Modifier.weight(1f).minimumInteractiveComponentSize().testTag("waveform_fadeout_button"),
                     shape = RoundedCornerShape(14.dp)
                 ) {
-                    Icon(Icons.Rounded.TrendingDown, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.AutoMirrored.Rounded.TrendingDown, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("Fade Out")
                 }
@@ -298,7 +298,7 @@ fun WaveformScreen(
                 modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize().testTag("waveform_merge_button"),
                 shape = RoundedCornerShape(14.dp)
             ) {
-                Icon(Icons.Rounded.MergeType, contentDescription = null, modifier = Modifier.size(20.dp))
+                Icon(Icons.AutoMirrored.Rounded.MergeType, contentDescription = null, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("חיבור ומיזוג רצועה נוספת (Merge / Join)")
             }
