@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -64,6 +65,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
@@ -141,12 +143,19 @@ fun StudioRootScreen(viewModel: StudioViewModel) {
     var pendingExportName by remember { mutableStateOf("playback") }
     var pendingExportFormat by remember { mutableStateOf(ExportFormat.WAV) }
     var pendingExportBitrate by remember { mutableStateOf(ExportBitrate.K320) }
+    var pendingExportSelectionOnly by remember { mutableStateOf(false) }
 
     val createExportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("*/*")
     ) { uri ->
         if (uri != null) {
-            viewModel.exportProject(pendingExportName, pendingExportFormat, pendingExportBitrate, uri)
+            viewModel.exportProject(
+                fileName = pendingExportName,
+                format = pendingExportFormat,
+                bitrate = pendingExportBitrate,
+                externalUri = uri,
+                exportSelectionOnly = pendingExportSelectionOnly
+            )
         }
     }
 
@@ -240,6 +249,8 @@ fun StudioRootScreen(viewModel: StudioViewModel) {
                                             stereoPeaksProvider = { stereoPeaksState.value },
                                             onTogglePlay = { viewModel.togglePlayPause() },
                                             onStop = { viewModel.stopPlayback() },
+                                            onSkipBack = { viewModel.skipByMs(-5000L) },
+                                            onSkipForward = { viewModel.skipByMs(5000L) },
                                             onSeek = { viewModel.seekToRatio(it) },
                                             onOpenExport = { viewModel.setShowExportSheet(true) }
                                         )
@@ -367,6 +378,8 @@ fun StudioRootScreen(viewModel: StudioViewModel) {
                                             stereoPeaksProvider = { stereoPeaksState.value },
                                             onTogglePlay = { viewModel.togglePlayPause() },
                                             onStop = { viewModel.stopPlayback() },
+                                            onSkipBack = { viewModel.skipByMs(-5000L) },
+                                            onSkipForward = { viewModel.skipByMs(5000L) },
                                             onSeek = { viewModel.seekToRatio(it) },
                                             onOpenExport = { viewModel.setShowExportSheet(true) },
                                             modifier = Modifier.clip(RoundedCornerShape(20.dp))
@@ -413,6 +426,8 @@ fun StudioRootScreen(viewModel: StudioViewModel) {
                                             stereoPeaksProvider = { stereoPeaksState.value },
                                             onTogglePlay = { viewModel.togglePlayPause() },
                                             onStop = { viewModel.stopPlayback() },
+                                            onSkipBack = { viewModel.skipByMs(-5000L) },
+                                            onSkipForward = { viewModel.skipByMs(5000L) },
                                             onSeek = { viewModel.seekToRatio(it) },
                                             onOpenExport = { viewModel.setShowExportSheet(true) }
                                         )
@@ -424,16 +439,28 @@ fun StudioRootScreen(viewModel: StudioViewModel) {
                 }
 
                 if (showExportSheet) {
+                    val selectionDurationMs = ((waveform.selectionEndRatio - waveform.selectionStartRatio) * playback.durationMs)
+                        .toLong()
+                        .coerceAtLeast(0L)
                     ExportBottomSheet(
                         defaultTitle = playback.activeTrackTitle,
+                        selectionDurationMs = selectionDurationMs,
+                        totalDurationMs = playback.durationMs,
                         onDismiss = { viewModel.setShowExportSheet(false) },
-                        onSaveInternalOnly = { name, fmt, br ->
-                            viewModel.exportProject(name, fmt, br, externalUri = null)
+                        onSaveInternalOnly = { name, fmt, br, selOnly ->
+                            viewModel.exportProject(
+                                fileName = name,
+                                format = fmt,
+                                bitrate = br,
+                                externalUri = null,
+                                exportSelectionOnly = selOnly
+                            )
                         },
-                        onPickFolderAndSave = { name, fmt, br ->
+                        onPickFolderAndSave = { name, fmt, br, selOnly ->
                             pendingExportName = name
                             pendingExportFormat = fmt
                             pendingExportBitrate = br
+                            pendingExportSelectionOnly = selOnly
                             val safeFile = "${name.trim().ifBlank { "playback" }}.${fmt.extension}"
                             createExportLauncher.launch(safeFile)
                         }
@@ -450,10 +477,15 @@ fun StudioRootScreen(viewModel: StudioViewModel) {
                         onLatencyModeChange = viewModel::updateLatencyMode,
                         onDefaultQualityChange = viewModel::updateDefaultQuality,
                         onVisualizerStyleChange = viewModel::updateVisualizerStyle,
+                        onMetronomeToneChange = viewModel::updateMetronomeTone,
+                        onLoudnessTargetChange = viewModel::updateLoudnessTarget,
+                        onNoiseGateEnabledChange = viewModel::updateNoiseGateEnabled,
+                        onNoiseGateThresholdChange = viewModel::updateNoiseGateThreshold,
                         onOverdubCompChange = viewModel::updateOverdubLatencyComp,
                         onAutoNormalizeRecChange = viewModel::updateAutoNormalizeRecording,
                         onLimiterCeilingChange = viewModel::updateLimiterCeiling,
-                        onClearCache = viewModel::clearOrphanedCacheFiles
+                        onClearCache = viewModel::clearOrphanedCacheFiles,
+                        onResetSettings = viewModel::resetAllAdvancedSettings
                     )
                 }
 
@@ -483,6 +515,7 @@ private fun ActiveTabContent(
     liveSamplesProvider: () -> FloatArray,
     onLaunchImport: () -> Unit
 ) {
+    val context = LocalContext.current
     when (selectedTab) {
         StudioTab.LIBRARY -> LibraryScreen(
             tracks = tracks,
@@ -496,6 +529,17 @@ private fun ActiveTabContent(
             onGoToRecordClick = { viewModel.selectTab(StudioTab.REHEARSAL) },
             onSelectTrack = viewModel::loadTrackFromLibrary,
             onRenameTrack = viewModel::renameTrack,
+            onDuplicateTrack = viewModel::duplicateTrack,
+            onShareTrack = { track ->
+                viewModel.getShareUriForTrack(track)?.let { uri ->
+                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = "audio/*"
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    context.startActivity(Intent.createChooser(shareIntent, "שתף קובץ שמע"))
+                }
+            },
             onDeleteTrack = viewModel::deleteTrack
         )
         StudioTab.MIXER -> MixerScreen(
@@ -552,7 +596,8 @@ private fun ActiveTabContent(
             onReverbChange = viewModel::updateReverbMix,
             onDelayChange = viewModel::updateDelayMix,
             onStereoWidthChange = viewModel::updateStereoWidth,
-            onToggleHighPass80Hz = viewModel::toggleHighPass80Hz
+            onToggleHighPass80Hz = viewModel::toggleHighPass80Hz,
+            onMasterGainChange = viewModel::updateMasterGain
         )
         StudioTab.REHEARSAL -> RehearsalScreen(
             hasAudio = hasAudio,
@@ -569,6 +614,7 @@ private fun ActiveTabContent(
             onTapTempo = viewModel::tapTempo,
             onToggleCountIn = viewModel::toggleCountIn,
             onMetronomeVolumeChange = viewModel::updateMetronomeVolume,
+            onMetronomeSignatureChange = viewModel::updateMetronomeSignature,
             onPlayWithCountIn = viewModel::playWithCountInIfEnabled,
             onToggleOverdubRecord = viewModel::toggleOverdubRecording,
             onOverdubGainChange = viewModel::updateOverdubGain,

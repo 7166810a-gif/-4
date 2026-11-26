@@ -10,6 +10,8 @@ import android.os.Build
 import com.example.data.AdvancedSettings
 import com.example.data.AudioBuffer
 import com.example.data.EqAndFxState
+import com.example.data.MetronomeSignature
+import com.example.data.MetronomeTone
 import com.example.data.MixerState
 import com.example.data.PitchTempoState
 import com.example.data.RehearsalState
@@ -67,6 +69,9 @@ class AudioEngineController {
     private val _stereoPeaks = MutableStateFlow(0f to 0f)
     val stereoPeaks: StateFlow<Pair<Float, Float>> = _stereoPeaks.asStateFlow()
 
+    private val _activeBeat = MutableStateFlow(-1)
+    val activeBeat: StateFlow<Int> = _activeBeat.asStateFlow()
+
     companion object {
         const val LIVE_WAVEFORM_SIZE = 72
     }
@@ -78,6 +83,7 @@ class AudioEngineController {
     val liveWaveform: StateFlow<FloatArray> = _liveWaveform.asStateFlow()
 
     @Volatile private var playFrameCursor = 0
+    @Volatile private var pendingSeekReset = false
     private var playbackJob: Job? = null
     private var recordingJob: Job? = null
 
@@ -114,6 +120,16 @@ class AudioEngineController {
         val buf = currentBuffer ?: return
         val target = (ratio.coerceIn(0f, 1f) * buf.frameCount).toInt().coerceIn(0, max(0, buf.frameCount - 1))
         playFrameCursor = target
+        pendingSeekReset = true
+        _positionMs.value = ((target.toDouble() / buf.sampleRate) * 1000.0).toLong()
+    }
+
+    fun skipByMs(deltaMs: Long) {
+        val buf = currentBuffer ?: return
+        val deltaFrames = ((deltaMs / 1000.0) * buf.sampleRate).toInt()
+        val target = (playFrameCursor + deltaFrames).coerceIn(0, max(0, buf.frameCount - 1))
+        playFrameCursor = target
+        pendingSeekReset = true
         _positionMs.value = ((target.toDouble() / buf.sampleRate) * 1000.0).toLong()
     }
 
@@ -155,6 +171,7 @@ class AudioEngineController {
         playbackJob = null
         _liveWaveform.value = liveZeroBuf
         _stereoPeaks.value = 0f to 0f
+        _activeBeat.value = -1
     }
 
     fun stopPlayback() {
@@ -165,6 +182,7 @@ class AudioEngineController {
         _positionMs.value = 0L
         _liveWaveform.value = liveZeroBuf
         _stereoPeaks.value = 0f to 0f
+        _activeBeat.value = -1
     }
 
     private fun publishLiveWaveform(left: FloatArray, right: FloatArray, frames: Int) {
@@ -238,7 +256,10 @@ class AudioEngineController {
         val pcmShorts = ShortArray(chunkFrames * 6)
 
         var metronomePhaseSample = 0L
-        var countInRemainingSamples = if (doCountIn) ((60.0 / rehearsalState.bpm.coerceIn(40, 240)) * 4 * sr).toLong() else 0L
+        val beatsPerBarInitial = rehearsalState.metronomeSignature.beatsPerBar
+        var countInRemainingSamples = if (doCountIn) {
+            ((60.0 / rehearsalState.bpm.coerceIn(40, 240)) * beatsPerBarInitial * sr).toLong()
+        } else 0L
 
         try {
             if (audioTrack.state != AudioTrack.STATE_INITIALIZED) {
@@ -246,16 +267,34 @@ class AudioEngineController {
             }
             audioTrack.play()
             while (scope.isActive && _isPlaying.value) {
+                if (pendingSeekReset) {
+                    pendingSeekReset = false
+                    sonic.reset()
+                    fxProcessor.reset()
+                }
                 val buf = currentBuffer ?: break
                 val totalFrames = buf.frameCount
                 if (totalFrames <= 0) break
 
-                // Optional 4-beat count-in before track starts advancing
+                val adv = advancedSettings
+                val reh = rehearsalState
+
+                // Optional count-in before track starts advancing
                 if (countInRemainingSamples > 0) {
                     val step = min(chunkFrames.toLong(), countInRemainingSamples).toInt()
                     mixL.fill(0f, 0, step)
                     mixR.fill(0f, 0, step)
-                    mixMetronomeClick(mixL, mixR, step, sr, rehearsalState.bpm, rehearsalState.metronomeVolume.coerceAtLeast(0.55f), metronomePhaseSample)
+                    mixMetronomeClick(
+                        left = mixL,
+                        right = mixR,
+                        frames = step,
+                        sr = sr,
+                        bpm = reh.bpm,
+                        volume = reh.metronomeVolume.coerceAtLeast(0.55f),
+                        signature = reh.metronomeSignature,
+                        tone = adv.metronomeTone,
+                        startSampleOffset = metronomePhaseSample
+                    )
                     metronomePhaseSample += step
                     countInRemainingSamples -= step
                     writeShorts(audioTrack, mixL, mixR, step, pcmShorts)
@@ -263,7 +302,6 @@ class AudioEngineController {
                 }
 
                 // Check A-B Loop boundaries
-                val reh = rehearsalState
                 val loopStartFrame = if (reh.loopEnabled) (reh.loopARatio * totalFrames).toInt().coerceIn(0, totalFrames - 1) else 0
                 val loopEndFrame = if (reh.loopEnabled) {
                     (reh.loopBRatio * totalFrames).toInt().coerceIn(loopStartFrame + 1, totalFrames)
@@ -339,13 +377,34 @@ class AudioEngineController {
 
                 var produced = sonic.readStereo(outL, outR, outL.size)
                 while (produced > 0) {
-                    // 3. Real-time EQ + Stereo Width + Reverb + Delay + Auto-Normalize Limiter
-                    fxProcessor.processBlock(outL, outR, produced, eqFxState, advancedSettings.limiterCeilingDb)
+                    // 3. Real-time EQ + Stereo Width + Reverb + Delay + Noise Gate + Auto-Normalize Limiter
+                    fxProcessor.processBlock(
+                        left = outL,
+                        right = outR,
+                        frames = produced,
+                        fx = eqFxState,
+                        limiterCeilingDb = adv.limiterCeilingDb,
+                        targetRms = adv.loudnessTarget.targetRms,
+                        noiseGateEnabled = adv.noiseGateEnabled,
+                        noiseGateThresholdDb = adv.noiseGateThresholdDb
+                    )
 
                     // 4. Real-time Metronome overlay (pitch-independent steady BPM click)
                     if (reh.metronomeEnabled) {
-                        mixMetronomeClick(outL, outR, produced, sr, reh.bpm, reh.metronomeVolume, metronomePhaseSample)
+                        mixMetronomeClick(
+                            left = outL,
+                            right = outR,
+                            frames = produced,
+                            sr = sr,
+                            bpm = reh.bpm,
+                            volume = reh.metronomeVolume,
+                            signature = reh.metronomeSignature,
+                            tone = adv.metronomeTone,
+                            startSampleOffset = metronomePhaseSample
+                        )
                         metronomePhaseSample += produced
+                    } else if (_activeBeat.value != -1) {
+                        _activeBeat.value = -1
                     }
 
                     writeShorts(audioTrack, outL, outR, produced, pcmShorts)
@@ -359,7 +418,16 @@ class AudioEngineController {
                     sonic.flush()
                     var flushed = sonic.readStereo(outL, outR, outL.size)
                     while (flushed > 0) {
-                        fxProcessor.processBlock(outL, outR, flushed, eqFxState, advancedSettings.limiterCeilingDb)
+                        fxProcessor.processBlock(
+                            left = outL,
+                            right = outR,
+                            frames = flushed,
+                            fx = eqFxState,
+                            limiterCeilingDb = adv.limiterCeilingDb,
+                            targetRms = adv.loudnessTarget.targetRms,
+                            noiseGateEnabled = adv.noiseGateEnabled,
+                            noiseGateThresholdDb = adv.noiseGateThresholdDb
+                        )
                         writeShorts(audioTrack, outL, outR, flushed, pcmShorts)
                         flushed = sonic.readStereo(outL, outR, outL.size)
                     }
@@ -377,6 +445,7 @@ class AudioEngineController {
                 playFrameCursor = 0
                 _positionMs.value = 0L
             }
+            _activeBeat.value = -1
             _isPlaying.value = false
         }
     }
@@ -388,19 +457,38 @@ class AudioEngineController {
         sr: Int,
         bpm: Int,
         volume: Float,
+        signature: MetronomeSignature,
+        tone: MetronomeTone,
         startSampleOffset: Long
     ) {
         val safeBpm = bpm.coerceIn(40, 240)
+        val beatsPerBar = signature.beatsPerBar
         val samplesPerBeat = ((60.0 / safeBpm) * sr).toLong().coerceAtLeast(1L)
         val clickLen = (sr * 0.032).toInt()
+        val midBeat = ((startSampleOffset + frames / 2L) / samplesPerBeat % beatsPerBar).toInt()
+        if (_activeBeat.value != midBeat) {
+            _activeBeat.value = midBeat
+        }
+
         for (i in 0 until frames) {
             val globalSample = startSampleOffset + i
             val posInBeat = (globalSample % samplesPerBeat).toInt()
             if (posInBeat < clickLen) {
-                val beatNum = (globalSample / samplesPerBeat) % 4L
-                val freq = if (beatNum == 0L) 1480.0 else 980.0
+                val beatNum = (globalSample / samplesPerBeat) % beatsPerBar.toLong()
+                val isAccent = beatNum == 0L
                 val t = posInBeat.toDouble() / sr
-                val click = (sin(2.0 * PI * freq * t) * exp(-t * 95.0) * volume * 0.65).toFloat()
+                val click = when (tone) {
+                    MetronomeTone.WOODBLOCK -> {
+                        val f1 = if (isAccent) 1180.0 else 840.0
+                        val f2 = f1 * 1.48
+                        ((sin(2.0 * PI * f1 * t) * 0.68 + sin(2.0 * PI * f2 * t) * 0.32) *
+                            exp(-t * 115.0) * volume * 0.72).toFloat()
+                    }
+                    MetronomeTone.DIGITAL -> {
+                        val freq = if (isAccent) 1600.0 else 1020.0
+                        (sin(2.0 * PI * freq * t) * exp(-t * 88.0) * volume * 0.65).toFloat()
+                    }
+                }
                 left[i] = (left[i] + click).coerceIn(-1f, 1f)
                 right[i] = (right[i] + click).coerceIn(-1f, 1f)
             }

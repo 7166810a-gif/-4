@@ -17,6 +17,9 @@ import com.example.data.EqPreset
 import com.example.data.ExportBitrate
 import com.example.data.ExportFormat
 import com.example.data.LibraryFilter
+import com.example.data.LoudnessTarget
+import com.example.data.MetronomeSignature
+import com.example.data.MetronomeTone
 import com.example.data.MixerState
 import com.example.data.PitchTempoState
 import com.example.data.PlaybackUiState
@@ -136,8 +139,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val eqFxState: StateFlow<EqAndFxState> = _eqFxState.asStateFlow()
 
     private val _rehearsalState = MutableStateFlow(RehearsalState())
-    val rehearsalState: StateFlow<RehearsalState> = combine(_rehearsalState, engine.micLevel) { reh, mic ->
-        reh.copy(micLevel = mic)
+    val rehearsalState: StateFlow<RehearsalState> = combine(
+        _rehearsalState,
+        engine.micLevel,
+        engine.activeBeat
+    ) { reh, mic, beat ->
+        reh.copy(micLevel = mic, activeBeat = beat)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), RehearsalState())
 
     val liveWaveform: StateFlow<FloatArray> = engine.liveWaveform
@@ -203,6 +210,20 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     fun updateOverdubLatencyComp(ms: Int) = updateAdvancedSettings { it.copy(overdubLatencyCompMs = ms.coerceIn(-120, 120)) }
     fun updateAutoNormalizeRecording(enabled: Boolean) = updateAdvancedSettings { it.copy(autoNormalizeRecording = enabled) }
     fun updateLimiterCeiling(db: Float) = updateAdvancedSettings { it.copy(limiterCeilingDb = db.coerceIn(-3.0f, -0.1f)) }
+    fun updateLoudnessTarget(target: LoudnessTarget) = updateAdvancedSettings { it.copy(loudnessTarget = target) }
+    fun updateNoiseGateEnabled(enabled: Boolean) = updateAdvancedSettings { it.copy(noiseGateEnabled = enabled) }
+    fun updateNoiseGateThreshold(db: Float) = updateAdvancedSettings { it.copy(noiseGateThresholdDb = db.coerceIn(-65f, -30f)) }
+    fun updateMetronomeTone(tone: MetronomeTone) = updateAdvancedSettings { it.copy(metronomeTone = tone) }
+
+    fun resetAllAdvancedSettings() {
+        val defaults = AdvancedSettings()
+        _advancedSettings.value = defaults
+        _darkTheme.value = defaults.darkTheme
+        engine.advancedSettings = defaults
+        _mixerState.update { it.copy(qualityMode = defaults.defaultQuality) }
+        settingsStore.save(defaults)
+        viewModelScope.launch { _snackbarMessages.emit("כל ההגדרות המתקדמות אופסו לברירת המחדל") }
+    }
 
     private fun updateAdvancedSettings(transform: (AdvancedSettings) -> AdvancedSettings) {
         val updated = transform(_advancedSettings.value)
@@ -347,6 +368,46 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun duplicateTrack(track: TrackEntity) {
+        viewModelScope.launch {
+            try {
+                val src = File(track.filePath)
+                if (!src.exists()) {
+                    _snackbarMessages.emit("קובץ המקור לא נמצא במכשיר")
+                    return@launch
+                }
+                val ext = src.extension.ifBlank { "wav" }
+                val copyFile = File(studioDir, "copy_${UUID.randomUUID()}.$ext")
+                withContext(Dispatchers.IO) { src.copyTo(copyFile, overwrite = true) }
+                val newTitle = "${track.title} (עותק)"
+                repository.insertTrack(
+                    track.copy(
+                        id = 0,
+                        title = newTitle,
+                        filePath = copyFile.absolutePath,
+                        stemsSeparated = false,
+                        createdAt = System.currentTimeMillis()
+                    )
+                )
+                refreshCacheSize()
+                _snackbarMessages.emit("נוצר עותק חדש: \"$newTitle\"")
+            } catch (e: Exception) {
+                _snackbarMessages.emit("שגיאה בשכפול הרצועה: ${e.message}")
+            }
+        }
+    }
+
+    fun getShareUriForTrack(track: TrackEntity): Uri? {
+        val file = File(track.filePath)
+        if (!file.exists()) return null
+        val appCtx = getApplication<Application>()
+        return androidx.core.content.FileProvider.getUriForFile(
+            appCtx,
+            "${appCtx.packageName}.fileprovider",
+            file
+        )
+    }
+
     fun deleteTrack(track: TrackEntity) {
         viewModelScope.launch {
             if (_activeTrackId.value == track.id) {
@@ -417,6 +478,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
     fun seekToRatio(ratio: Float) {
         engine.seekToRatio(ratio)
+    }
+
+    fun skipByMs(deltaMs: Long) {
+        engine.skipByMs(deltaMs)
     }
 
     // --- 4-Stem Separation & Mixer ---
@@ -601,6 +666,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
     fun toggleHighPass80Hz(enabled: Boolean) {
         _eqFxState.update { it.copy(highPass80Hz = enabled) }
+        syncEngineStates()
+    }
+
+    fun updateMasterGain(db: Float) {
+        _eqFxState.update { it.copy(masterGainDb = db.coerceIn(-6.0f, 4.0f)) }
         syncEngineStates()
     }
 
@@ -796,6 +866,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         syncEngineStates()
     }
 
+    fun updateMetronomeSignature(signature: MetronomeSignature) {
+        _rehearsalState.update { it.copy(metronomeSignature = signature) }
+        syncEngineStates()
+    }
+
     fun toggleOverdubRecording() {
         val currentlyRecording = _rehearsalState.value.isRecordingOverdub
         if (currentlyRecording) {
@@ -845,7 +920,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         fileName: String,
         format: ExportFormat,
         bitrate: ExportBitrate,
-        externalUri: Uri?
+        externalUri: Uri?,
+        exportSelectionOnly: Boolean = false
     ) {
         val buf = engine.currentBuffer ?: run {
             viewModelScope.launch { _snackbarMessages.emit("אין רצועה טעונה לייצוא") }
@@ -857,6 +933,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 val safeName = fileName.trim().ifBlank { "playback_export" }
                 val archiveFile = File(exportDir, "${safeName}_${System.currentTimeMillis()}.${format.extension}")
+                val adv = _advancedSettings.value
+                val wf = _waveformState.value
+                val selectionPair = if (exportSelectionOnly) wf.selectionStartRatio to wf.selectionEndRatio else null
                 val rendered = AudioExporter.renderAndExport(
                     context = getApplication<Application>(),
                     sourceBuffer = buf,
@@ -870,7 +949,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     bitrate = bitrate,
                     internalArchiveFile = archiveFile,
                     externalUri = externalUri,
-                    limiterCeilingDb = _advancedSettings.value.limiterCeilingDb
+                    limiterCeilingDb = adv.limiterCeilingDb,
+                    targetRms = adv.loudnessTarget.targetRms,
+                    noiseGateEnabled = adv.noiseGateEnabled,
+                    noiseGateThresholdDb = adv.noiseGateThresholdDb,
+                    selectionRange = selectionPair
                 ) { p ->
                     _processing.value = ProcessingProgress(true, "מעבד ומקודד קובץ סופי...", p)
                 }

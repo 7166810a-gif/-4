@@ -49,6 +49,7 @@ class AudioEffectsProcessor(private val sampleRate: Int = 44100) {
     private val combFb = floatArrayOf(0.805f, 0.827f, 0.783f, 0.764f)
 
     private var rmsEnvelope = 0.2f
+    private var gateEnvelope = 1.0f
     private var lastBassDb = Float.NaN
     private var lastMidDb = Float.NaN
     private var lastTrebleDb = Float.NaN
@@ -62,6 +63,7 @@ class AudioEffectsProcessor(private val sampleRate: Int = 44100) {
         combL.forEach { it.fill(0f) }
         combR.forEach { it.fill(0f) }
         rmsEnvelope = 0.2f
+        gateEnvelope = 1.0f
     }
 
     fun processBlock(
@@ -69,7 +71,10 @@ class AudioEffectsProcessor(private val sampleRate: Int = 44100) {
         right: FloatArray,
         frames: Int,
         fx: EqAndFxState,
-        limiterCeilingDb: Float = -0.5f
+        limiterCeilingDb: Float = -0.5f,
+        targetRms: Float = 0.24f,
+        noiseGateEnabled: Boolean = false,
+        noiseGateThresholdDb: Float = -50f
     ) {
         updateCoefficientsIfNeeded(fx)
 
@@ -78,10 +83,22 @@ class AudioEffectsProcessor(private val sampleRate: Int = 44100) {
         val width = fx.stereoWidth.coerceIn(0f, 1.6f)
         val applyEq = abs(fx.bassDb) > 0.05f || abs(fx.midDb) > 0.05f || abs(fx.trebleDb) > 0.05f
         val ceilingLinear = 10.0.pow(limiterCeilingDb.coerceIn(-3.0f, -0.05f) / 20.0).toFloat()
+        val masterLinear = 10.0.pow(fx.masterGainDb.coerceIn(-6.0f, 4.0f) / 20.0).toFloat()
+        val gateThreshLinear = 10.0.pow(noiseGateThresholdDb.coerceIn(-65f, -30f) / 20.0).toFloat()
 
         for (i in 0 until frames) {
             var l = left[i]
             var r = right[i]
+
+            // 0. Optional Smooth Noise Gate
+            if (noiseGateEnabled) {
+                val level = maxOf(abs(l), abs(r))
+                val targetGate = if (level >= gateThreshLinear) 1.0f else 0.08f
+                val coef = if (targetGate > gateEnvelope) 0.06f else 0.003f
+                gateEnvelope += (targetGate - gateEnvelope) * coef
+                l *= gateEnvelope
+                r *= gateEnvelope
+            }
 
             // 1. Optional 80Hz High-Pass Rumble Filter
             if (fx.highPass80Hz) {
@@ -138,12 +155,14 @@ class AudioEffectsProcessor(private val sampleRate: Int = 44100) {
                 r = r * (1f - reverbWet * 0.3f) + (revR * 0.25f) * reverbWet
             }
 
-            // 6. Auto-Normalize & Soft-Clip Brickwall Limiter
+            // 6. Master Output Gain + Auto-Normalize & Soft-Clip Brickwall Limiter
+            l *= masterLinear
+            r *= masterLinear
             if (fx.autoNormalizeLimiter) {
                 val energy = 0.5f * (l * l + r * r)
                 rmsEnvelope = rmsEnvelope * 0.9992f + energy * 0.0008f
                 val rms = sqrt(rmsEnvelope.coerceAtLeast(1e-5f))
-                val targetGain = (0.24f / rms).coerceIn(0.65f, 2.0f)
+                val targetGain = (targetRms / rms).coerceIn(0.55f, 2.2f)
                 l = softLimit(l * targetGain, ceilingLinear)
                 r = softLimit(r * targetGain, ceilingLinear)
             } else {

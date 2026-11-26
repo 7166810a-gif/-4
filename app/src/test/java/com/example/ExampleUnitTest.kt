@@ -131,4 +131,53 @@ class ExampleUnitTest {
         assertEquals("Cm", AudioAnalyzer.formatTransposedKey(base, +3))
         assertEquals("F#m", AudioAnalyzer.formatTransposedKey(base, -3))
     }
+
+    @Test
+    fun audioEngine_skipByMsClampsWithinBufferBounds() {
+        val controller = AudioEngineController()
+        val buf = AudioBuffer(44100, FloatArray(44100 * 10), FloatArray(44100 * 10))
+        controller.loadBuffer(buf)
+
+        controller.skipByMs(5000L)
+        assertEquals(5000L, controller.positionMs.value)
+
+        controller.skipByMs(20_000L)
+        assertTrue(controller.positionMs.value in 9990L..10_000L)
+
+        controller.skipByMs(-30_000L)
+        assertEquals(0L, controller.positionMs.value)
+    }
+
+    @Test
+    fun effectsProcessor_noiseGateAndMasterGainAndLoudnessTargetWork() {
+        // Noise gate attenuates low-level hum well below threshold
+        val gateFx = AudioEffectsProcessor(44100)
+        val quietL = FloatArray(2048) { 0.001f } // ~ -60 dBFS
+        val quietR = FloatArray(2048) { 0.001f }
+        gateFx.processBlock(
+            quietL,
+            quietR,
+            2048,
+            EqAndFxState(autoNormalizeLimiter = false, highPass80Hz = false),
+            noiseGateEnabled = true,
+            noiseGateThresholdDb = -35f
+        )
+        assertTrue("Noise gate should attenuate quiet tail", abs(quietL.last()) < 0.0002f)
+
+        // Master gain scales signal linearly when limiter is off
+        val gainFx = AudioEffectsProcessor(44100)
+        val dryL = FloatArray(256) { 0.25f }
+        val dryR = FloatArray(256) { 0.25f }
+        gainFx.processBlock(
+            dryL,
+            dryR,
+            256,
+            EqAndFxState(autoNormalizeLimiter = false, highPass80Hz = false, masterGainDb = -6.0f)
+        )
+        assertEquals(0.125f, dryL.last(), 0.01f)
+
+        // LoudnessTarget values are ordered from gentle to stage
+        assertTrue(com.example.data.LoudnessTarget.GENTLE_18.targetRms < com.example.data.LoudnessTarget.BALANCED_14.targetRms)
+        assertTrue(com.example.data.LoudnessTarget.BALANCED_14.targetRms < com.example.data.LoudnessTarget.STAGE_11.targetRms)
+    }
 }

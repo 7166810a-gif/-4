@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddCircleOutline
 import androidx.compose.material.icons.rounded.AudioFile
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FileOpen
@@ -33,6 +34,7 @@ import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.OfflineBolt
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -86,6 +88,8 @@ fun LibraryScreen(
     onGoToRecordClick: () -> Unit,
     onSelectTrack: (TrackEntity) -> Unit,
     onRenameTrack: (TrackEntity, String) -> Unit,
+    onDuplicateTrack: (TrackEntity) -> Unit,
+    onShareTrack: (TrackEntity) -> Unit,
     onDeleteTrack: (TrackEntity) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -484,6 +488,34 @@ fun LibraryScreen(
                         if (info.stemsSeparated) "ערוצים: מופרד ל-4 ערוצים (Stems)" else "ערוצים: רצועת סטריאו מאוחדת",
                         style = MaterialTheme.typography.bodyMedium
                     )
+                    Spacer(Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                onDuplicateTrack(info)
+                                trackForDetails = null
+                            },
+                            modifier = Modifier.weight(1f).minimumInteractiveComponentSize().testTag("duplicate_track_button")
+                        ) {
+                            Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("שכפל")
+                        }
+                        Button(
+                            onClick = {
+                                onShareTrack(info)
+                                trackForDetails = null
+                            },
+                            modifier = Modifier.weight(1f).minimumInteractiveComponentSize().testTag("share_track_button")
+                        ) {
+                            Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("שתף קובץ")
+                        }
+                    }
                 }
             },
             confirmButton = {

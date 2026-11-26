@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -61,6 +62,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.R
+import com.example.data.MetronomeSignature
 import com.example.data.PlaybackUiState
 import com.example.data.RehearsalState
 import com.example.data.VisualizerStyle
@@ -88,6 +90,7 @@ fun RehearsalScreen(
     onTapTempo: () -> Unit,
     onToggleCountIn: (Boolean) -> Unit,
     onMetronomeVolumeChange: (Float) -> Unit,
+    onMetronomeSignatureChange: (MetronomeSignature) -> Unit,
     onPlayWithCountIn: () -> Unit,
     onToggleOverdubRecord: () -> Unit,
     onOverdubGainChange: (Float) -> Unit,
@@ -253,12 +256,53 @@ fun RehearsalScreen(
                     )
                 }
 
+                // Time Signature & Live Pulsing Beat LEDs
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("ספירה מקדימה (4 פעימות Count-In)", style = MaterialTheme.typography.bodyMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        MetronomeSignature.entries.forEach { sig ->
+                            FilterChip(
+                                selected = rehearsal.metronomeSignature == sig,
+                                onClick = { onMetronomeSignatureChange(sig) },
+                                label = {
+                                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                                        Text(sig.label)
+                                    }
+                                },
+                                modifier = Modifier.testTag("metronome_sig_${sig.name.lowercase()}")
+                            )
+                        }
+                    }
+
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            for (beatIdx in 0 until rehearsal.metronomeSignature.beatsPerBar) {
+                                val isLit = rehearsal.activeBeat == beatIdx
+                                val dotColor = when {
+                                    isLit && beatIdx == 0 -> WarmAmber
+                                    isLit -> EmeraldDrum
+                                    else -> MaterialTheme.colorScheme.outline
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .size(if (isLit) 14.dp else 10.dp)
+                                        .clip(CircleShape)
+                                        .background(dotColor)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("ספירה מקדימה (${rehearsal.metronomeSignature.beatsPerBar} פעימות Count-In)", style = MaterialTheme.typography.bodyMedium)
                     Switch(
                         checked = rehearsal.countInEnabled,
                         onCheckedChange = onToggleCountIn,

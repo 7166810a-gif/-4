@@ -66,6 +66,7 @@ fun EffectsScreen(
     onDelayChange: (Float) -> Unit,
     onStereoWidthChange: (Float) -> Unit,
     onToggleHighPass80Hz: (Boolean) -> Unit,
+    onMasterGainChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -181,7 +182,7 @@ fun EffectsScreen(
             }
         }
 
-        // 2. Auto-Normalize & Limiter
+        // 2. Auto-Normalize, Master Output Gain & Limiter
         Surface(
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surfaceVariant,
@@ -189,33 +190,60 @@ fun EffectsScreen(
                 .fillMaxWidth()
                 .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
         ) {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Row(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Icon(Icons.Rounded.Shield, contentDescription = null, tint = EmeraldDrum, modifier = Modifier.size(28.dp))
-                    Column {
-                        Text("מאזן עוצמה ומגביל עיוותים", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "Auto-Normalize & Brickwall Limiter למניעת קטיעות שמע ועוצמה אחידה",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(Icons.Rounded.Shield, contentDescription = null, tint = EmeraldDrum, modifier = Modifier.size(28.dp))
+                        Column {
+                            Text("מאזן עוצמה ומגביל עיוותים", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Auto-Normalize & Brickwall Limiter למניעת קטיעות שמע ועוצמה אחידה",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = fx.autoNormalizeLimiter,
+                        onCheckedChange = onToggleAutoNormalize,
+                        modifier = Modifier.testTag("auto_normalize_switch")
+                    )
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("עוצמת מוצא ראשית (Master Gain)", style = MaterialTheme.typography.bodyMedium)
+                        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                            Text(
+                                String.format(Locale.US, "%+.1f dB", fx.masterGainDb),
+                                style = StudioMonoStyle,
+                                color = EmeraldDrum
+                            )
+                        }
+                    }
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        Slider(
+                            value = fx.masterGainDb,
+                            onValueChange = onMasterGainChange,
+                            valueRange = -6.0f..4.0f,
+                            colors = SliderDefaults.colors(thumbColor = EmeraldDrum, activeTrackColor = EmeraldDrum),
+                            modifier = Modifier.fillMaxWidth().height(32.dp).testTag("fx_master_gain_slider")
                         )
                     }
                 }
-                Switch(
-                    checked = fx.autoNormalizeLimiter,
-                    onCheckedChange = onToggleAutoNormalize,
-                    modifier = Modifier.testTag("auto_normalize_switch")
-                )
             }
         }
 

@@ -28,8 +28,11 @@ import androidx.compose.material.icons.rounded.AudioFile
 import androidx.compose.material.icons.rounded.CleaningServices
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Forward5
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Replay5
+import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
@@ -84,6 +87,8 @@ import com.example.data.AdvancedSettings
 import com.example.data.AudioLatencyMode
 import com.example.data.ExportBitrate
 import com.example.data.ExportFormat
+import com.example.data.LoudnessTarget
+import com.example.data.MetronomeTone
 import com.example.data.PlaybackUiState
 import com.example.data.ProcessingProgress
 import com.example.data.ProcessingQuality
@@ -314,6 +319,8 @@ fun TransportConsoleBar(
     stereoPeaksProvider: () -> Pair<Float, Float> = { 0f to 0f },
     onTogglePlay: () -> Unit,
     onStop: () -> Unit,
+    onSkipBack: () -> Unit = {},
+    onSkipForward: () -> Unit = {},
     onSeek: (Float) -> Unit,
     onOpenExport: () -> Unit,
     modifier: Modifier = Modifier
@@ -377,8 +384,21 @@ fun TransportConsoleBar(
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
+                    IconButton(
+                        onClick = onSkipBack,
+                        enabled = hasAudio,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("transport_skip_back_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Replay5,
+                            contentDescription = "חזור 5 שניות"
+                        )
+                    }
+
                     IconButton(
                         onClick = onStop,
                         enabled = hasAudio,
@@ -410,13 +430,26 @@ fun TransportConsoleBar(
                         )
                     }
 
+                    IconButton(
+                        onClick = onSkipForward,
+                        enabled = hasAudio,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("transport_skip_forward_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Forward5,
+                            contentDescription = "קדם 5 שניות"
+                        )
+                    }
+
                     OutlinedButton(
                         onClick = onOpenExport,
                         enabled = hasAudio,
                         modifier = Modifier
                             .minimumInteractiveComponentSize()
                             .testTag("transport_export_button"),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 8.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.FileDownload,
@@ -517,15 +550,18 @@ fun ProcessingOverlayModal(progress: ProcessingProgress) {
 @Composable
 fun ExportBottomSheet(
     defaultTitle: String,
+    selectionDurationMs: Long,
+    totalDurationMs: Long,
     onDismiss: () -> Unit,
-    onSaveInternalOnly: (String, ExportFormat, ExportBitrate) -> Unit,
-    onPickFolderAndSave: (String, ExportFormat, ExportBitrate) -> Unit
+    onSaveInternalOnly: (String, ExportFormat, ExportBitrate, Boolean) -> Unit,
+    onPickFolderAndSave: (String, ExportFormat, ExportBitrate, Boolean) -> Unit
 ) {
     var fileName by remember(defaultTitle) {
         mutableStateOf("${defaultTitle.ifBlank { "playback" }}_studio")
     }
     var selectedFormat by remember { mutableStateOf(ExportFormat.WAV) }
     var selectedBitrate by remember { mutableStateOf(ExportBitrate.K320) }
+    var exportSelectionOnly by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -534,6 +570,7 @@ fun ExportBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 8.dp)
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -557,6 +594,16 @@ fun ExportBottomSheet(
                     .fillMaxWidth()
                     .testTag("export_filename_input")
             )
+
+            if (totalDurationMs > 0L && selectionDurationMs in 1000L until totalDurationMs) {
+                SettingSwitchRow(
+                    title = "ייצא את טווח העריכה הנבחר בלבד",
+                    subtitle = "אורך יעד: ${formatTimeMs(if (exportSelectionOnly) selectionDurationMs else totalDurationMs)}",
+                    checked = exportSelectionOnly,
+                    onCheckedChange = { exportSelectionOnly = it },
+                    tag = "export_selection_only_switch"
+                )
+            }
 
             Text("בחר פורמט קובץ", style = MaterialTheme.typography.titleSmall)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -612,7 +659,7 @@ fun ExportBottomSheet(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 OutlinedButton(
-                    onClick = { onSaveInternalOnly(fileName, selectedFormat, selectedBitrate) },
+                    onClick = { onSaveInternalOnly(fileName, selectedFormat, selectedBitrate, exportSelectionOnly) },
                     modifier = Modifier
                         .weight(1f)
                         .minimumInteractiveComponentSize()
@@ -621,7 +668,7 @@ fun ExportBottomSheet(
                     Text("שמור בספרייה")
                 }
                 Button(
-                    onClick = { onPickFolderAndSave(fileName, selectedFormat, selectedBitrate) },
+                    onClick = { onPickFolderAndSave(fileName, selectedFormat, selectedBitrate, exportSelectionOnly) },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                     modifier = Modifier
                         .weight(1.3f)
@@ -648,10 +695,15 @@ fun AdvancedSettingsBottomSheet(
     onLatencyModeChange: (AudioLatencyMode) -> Unit,
     onDefaultQualityChange: (ProcessingQuality) -> Unit,
     onVisualizerStyleChange: (VisualizerStyle) -> Unit,
+    onMetronomeToneChange: (MetronomeTone) -> Unit,
+    onLoudnessTargetChange: (LoudnessTarget) -> Unit,
+    onNoiseGateEnabledChange: (Boolean) -> Unit,
+    onNoiseGateThresholdChange: (Float) -> Unit,
     onOverdubCompChange: (Int) -> Unit,
     onAutoNormalizeRecChange: (Boolean) -> Unit,
     onLimiterCeilingChange: (Float) -> Unit,
-    onClearCache: () -> Unit
+    onClearCache: () -> Unit,
+    onResetSettings: () -> Unit
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -755,7 +807,62 @@ fun AdvancedSettingsBottomSheet(
                 }
             }
 
+            // Metronome Sound Tone
+            Text("גוון צליל המטרונום", style = MaterialTheme.typography.titleSmall)
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                MetronomeTone.entries.forEachIndexed { idx, tone ->
+                    SegmentedButton(
+                        selected = settings.metronomeTone == tone,
+                        onClick = { onMetronomeToneChange(tone) },
+                        shape = SegmentedButtonDefaults.itemShape(idx, MetronomeTone.entries.size)
+                    ) {
+                        Text(tone.titleHe, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
+            // Auto-Normalize Loudness Target
+            Text("יעד עוצמה אוטומטית (Loudness Target)", style = MaterialTheme.typography.titleSmall)
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                LoudnessTarget.entries.forEachIndexed { idx, target ->
+                    SegmentedButton(
+                        selected = settings.loudnessTarget == target,
+                        onClick = { onLoudnessTargetChange(target) },
+                        shape = SegmentedButtonDefaults.itemShape(idx, LoudnessTarget.entries.size)
+                    ) {
+                        Text(target.titleHe, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+
+            // Noise Gate
+            SettingSwitchRow(
+                title = "שער רעשים (Noise Gate)",
+                subtitle = "משתיק רעשי רקע וזמזום בקטעים שקטים",
+                checked = settings.noiseGateEnabled,
+                onCheckedChange = onNoiseGateEnabledChange,
+                tag = "settings_noise_gate_switch"
+            )
+            if (settings.noiseGateEnabled) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("סף השתקה (Gate Threshold)", style = MaterialTheme.typography.bodyMedium)
+                        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                            Text("${settings.noiseGateThresholdDb.roundToInt()} dB", style = StudioMonoStyle, color = ElectricCyan)
+                        }
+                    }
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        Slider(
+                            value = settings.noiseGateThresholdDb,
+                            onValueChange = onNoiseGateThresholdChange,
+                            valueRange = -65f..-30f,
+                            modifier = Modifier.fillMaxWidth().testTag("settings_noise_gate_slider")
+                        )
+                    }
+                }
+            }
 
             // Overdub Latency Compensation
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -840,6 +947,15 @@ fun AdvancedSettingsBottomSheet(
                         Text("נקה מטמון")
                     }
                 }
+            }
+
+            OutlinedButton(
+                onClick = onResetSettings,
+                modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize().testTag("settings_reset_all_button")
+            ) {
+                Icon(Icons.Rounded.RestartAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("אפס את כל ההגדרות לברירת מחדל")
             }
         }
     }

@@ -54,7 +54,10 @@ object AudioDecoder {
 
     suspend fun loadWavFile(file: File): AudioBuffer = withContext(Dispatchers.IO) {
         if (!file.exists()) error("קובץ השמע לא נמצא במכשיר")
-        readPcmWavFile(file) ?: decodeFileWithMediaExtractor(file)
+        readPcmWavFile(file) ?: run {
+            val decoded = decodeFileWithMediaExtractor(file)
+            if (decoded.sampleRate == TARGET_SAMPLE_RATE) decoded else resampleStereo(decoded, TARGET_SAMPLE_RATE)
+        }
     }
 
     suspend fun writeWavFile(buffer: AudioBuffer, outFile: File) = withContext(Dispatchers.IO) {

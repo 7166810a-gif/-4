@@ -33,6 +33,23 @@ enum class VisualizerStyle(val titleHe: String) {
     WAVE("גל קלאסי")
 }
 
+enum class MetronomeSignature(val label: String, val beatsPerBar: Int) {
+    FOUR_FOUR("4/4", 4),
+    THREE_FOUR("3/4", 3),
+    SIX_EIGHT("6/8", 6)
+}
+
+enum class MetronomeTone(val titleHe: String) {
+    WOODBLOCK("עץ קלאסי"),
+    DIGITAL("ביפ אולפני")
+}
+
+enum class LoudnessTarget(val titleHe: String, val targetRms: Float) {
+    GENTLE_18("דינמי (-18 LUFS)", 0.17f),
+    BALANCED_14("מאוזן (-14 LUFS)", 0.24f),
+    STAGE_11("במה חזק (-11 LUFS)", 0.32f)
+}
+
 enum class EqPreset(
     val titleHe: String,
     val bassDb: Float,
@@ -105,7 +122,11 @@ data class AdvancedSettings(
     val visualizerStyle: VisualizerStyle = VisualizerStyle.HYBRID,
     val overdubLatencyCompMs: Int = 35, // -120 .. +120 ms
     val autoNormalizeRecording: Boolean = true,
-    val limiterCeilingDb: Float = -0.5f // -3.0 .. -0.1 dB
+    val limiterCeilingDb: Float = -0.5f, // -3.0 .. -0.1 dB
+    val loudnessTarget: LoudnessTarget = LoudnessTarget.BALANCED_14,
+    val noiseGateEnabled: Boolean = false,
+    val noiseGateThresholdDb: Float = -50f, // -65 .. -30 dB
+    val metronomeTone: MetronomeTone = MetronomeTone.WOODBLOCK
 )
 
 data class MixerState(
@@ -145,7 +166,8 @@ data class EqAndFxState(
     val reverbMix: Float = 0f,       // 0f .. 0.6f
     val delayMix: Float = 0f,        // 0f .. 0.5f
     val stereoWidth: Float = 1.0f,   // 0f (Mono) .. 1.6f (Wide)
-    val highPass80Hz: Boolean = false
+    val highPass80Hz: Boolean = false,
+    val masterGainDb: Float = 0f     // -6.0 .. +4.0 dB
 )
 
 data class RehearsalState(
@@ -156,6 +178,8 @@ data class RehearsalState(
     val bpm: Int = 110,
     val countInEnabled: Boolean = false,
     val metronomeVolume: Float = 0.7f,
+    val metronomeSignature: MetronomeSignature = MetronomeSignature.FOUR_FOUR,
+    val activeBeat: Int = -1,
     val isRecordingOverdub: Boolean = false,
     val hasOverdubTrack: Boolean = false,
     val overdubGain: Float = 1.0f,

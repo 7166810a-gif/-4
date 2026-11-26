@@ -37,11 +37,23 @@ object AudioExporter {
         internalArchiveFile: File,
         externalUri: Uri?,
         limiterCeilingDb: Float = -0.5f,
+        targetRms: Float = 0.24f,
+        noiseGateEnabled: Boolean = false,
+        noiseGateThresholdDb: Float = -50f,
+        selectionRange: Pair<Float, Float>? = null,
         onProgress: (Float) -> Unit
     ): AudioBuffer = withContext(Dispatchers.Default) {
         onProgress(0.05f)
         // 1. Mix Stems + Overdub
-        val frames = sourceBuffer.frameCount
+        val totalSourceFrames = sourceBuffer.frameCount
+        val startFrame = if (selectionRange != null) {
+            (selectionRange.first.coerceIn(0f, 0.98f) * totalSourceFrames).toInt()
+        } else 0
+        val endFrame = if (selectionRange != null) {
+            (selectionRange.second.coerceIn(selectionRange.first + 0.02f, 1f) * totalSourceFrames).toInt()
+                .coerceAtLeast(startFrame + 1)
+        } else totalSourceFrames
+        val frames = (endFrame - startFrame).coerceAtLeast(1)
         val mixedL = FloatArray(frames)
         val mixedR = FloatArray(frames)
 
@@ -52,29 +64,32 @@ object AudioExporter {
         val dGain = if (mixer.drumsMute || (anySolo && !mixer.drumsSolo)) 0f else mixer.drumsGain
 
         if (stems != null && mixer.stemsSeparated) {
-            for (i in 0 until min(frames, stems.frameCount)) {
-                val vl = stems.vocalsLeft[i]
-                val vr = stems.vocalsRight[i]
-                var al = stems.accompLeft[i]
-                var ar = stems.accompRight[i]
+            for (i in 0 until frames) {
+                val srcIdx = startFrame + i
+                if (srcIdx >= stems.frameCount) break
+                val vl = stems.vocalsLeft[srcIdx]
+                val vr = stems.vocalsRight[srcIdx]
+                var al = stems.accompLeft[srcIdx]
+                var ar = stems.accompRight[srcIdx]
                 if (mixer.vocalTailCleanup) {
                     val cleaned = StemSeparatorEngine.applyVocalTailCleanup(al, ar, vl, vr, vGain)
                     al = cleaned.first
                     ar = cleaned.second
                 }
-                mixedL[i] = vl * vGain + al * aGain + stems.bassLeft[i] * bGain + stems.drumsLeft[i] * dGain
-                mixedR[i] = vr * vGain + ar * aGain + stems.bassRight[i] * bGain + stems.drumsRight[i] * dGain
+                mixedL[i] = vl * vGain + al * aGain + stems.bassLeft[srcIdx] * bGain + stems.drumsLeft[srcIdx] * dGain
+                mixedR[i] = vr * vGain + ar * aGain + stems.bassRight[srcIdx] * bGain + stems.drumsRight[srcIdx] * dGain
             }
         } else {
-            System.arraycopy(sourceBuffer.left, 0, mixedL, 0, frames)
-            System.arraycopy(sourceBuffer.right, 0, mixedR, 0, frames)
+            System.arraycopy(sourceBuffer.left, startFrame, mixedL, 0, frames)
+            System.arraycopy(sourceBuffer.right, startFrame, mixedR, 0, frames)
         }
 
         if (overdubBuffer != null) {
-            val odFrames = min(frames, overdubBuffer.frameCount)
-            for (i in 0 until odFrames) {
-                mixedL[i] += overdubBuffer.left[i] * overdubGain
-                mixedR[i] += overdubBuffer.right[i] * overdubGain
+            for (i in 0 until frames) {
+                val srcIdx = startFrame + i
+                if (srcIdx >= overdubBuffer.frameCount) break
+                mixedL[i] += overdubBuffer.left[srcIdx] * overdubGain
+                mixedR[i] += overdubBuffer.right[srcIdx] * overdubGain
             }
         }
 
@@ -134,9 +149,18 @@ object AudioExporter {
 
         onProgress(0.60f)
 
-        // 3. Apply Studio EQ + Stereo Width + Reverb + Delay + Auto-Normalize Limiter
+        // 3. Apply Studio EQ + Stereo Width + Reverb + Delay + Noise Gate + Auto-Normalize Limiter
         val fxProc = AudioEffectsProcessor(sourceBuffer.sampleRate)
-        fxProc.processBlock(finalL, finalR, totalOutFrames, fx, limiterCeilingDb)
+        fxProc.processBlock(
+            left = finalL,
+            right = finalR,
+            frames = totalOutFrames,
+            fx = fx,
+            limiterCeilingDb = limiterCeilingDb,
+            targetRms = targetRms,
+            noiseGateEnabled = noiseGateEnabled,
+            noiseGateThresholdDb = noiseGateThresholdDb
+        )
 
         val renderedBuffer = AudioBuffer(sourceBuffer.sampleRate, finalL, finalR)
         onProgress(0.72f)
