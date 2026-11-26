@@ -20,13 +20,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoFixHigh
+import androidx.compose.material.icons.rounded.AvTimer
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Piano
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
@@ -55,10 +58,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import com.example.audio.AudioAnalyzer
+import com.example.data.AudioAnalysisResult
 import com.example.data.MixerState
 import com.example.data.PitchTempoState
 import com.example.data.ProcessingQuality
 import com.example.data.StemPreset
+import com.example.data.VisualizerStyle
 import com.example.ui.components.RealtimeWaveformCanvas
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.EmeraldDrum
@@ -72,6 +78,8 @@ import kotlin.math.roundToInt
 fun MixerScreen(
     hasAudio: Boolean,
     isPlaying: Boolean,
+    visualizerStyle: VisualizerStyle,
+    analysisResult: AudioAnalysisResult,
     liveSamplesProvider: () -> FloatArray,
     mixer: MixerState,
     pitchTempo: PitchTempoState,
@@ -86,6 +94,8 @@ fun MixerScreen(
     onPitchFineCentsChange: (Int) -> Unit,
     onTempoChange: (Float) -> Unit,
     onResetPitchTempo: () -> Unit,
+    onSyncMetronomeToBpm: () -> Unit,
+    onReanalyzeTrack: () -> Unit,
     onGoToLibrary: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -128,8 +138,60 @@ fun MixerScreen(
         RealtimeWaveformCanvas(
             samplesProvider = liveSamplesProvider,
             isActive = isPlaying,
+            style = visualizerStyle,
             labelHe = "אוסילוסקופ וגל קול חי (Real-Time)"
         )
+
+        // 0.5 Smart Offline BPM & Musical Key Analysis Card
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("זיהוי סולם וקצב אוטומטי (אופליין)", style = MaterialTheme.typography.labelLarge)
+                    val transposedKey = AudioAnalyzer.formatTransposedKey(analysisResult, pitchTempo.semitones)
+                    val keyDisplay = if (pitchTempo.semitones != 0 && analysisResult.rootPitchClass in 0..11) {
+                        "${analysisResult.detectedKeyLabel} → $transposedKey"
+                    } else {
+                        analysisResult.detectedKeyLabel
+                    }
+                    val bpmDisplay = if (analysisResult.detectedBpm > 0) "${analysisResult.detectedBpm} BPM" else "—"
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        Text(
+                            text = "Key: $keyDisplay   •   Tempo: $bpmDisplay",
+                            style = StudioMonoStyle,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (analysisResult.detectedBpm > 0) {
+                        AssistChip(
+                            onClick = onSyncMetronomeToBpm,
+                            label = { Text("סנכרן") },
+                            leadingIcon = { Icon(Icons.Rounded.AvTimer, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                            modifier = Modifier.testTag("sync_detected_bpm_chip")
+                        )
+                    }
+                    IconButton(
+                        onClick = onReanalyzeTrack,
+                        modifier = Modifier.minimumInteractiveComponentSize().testTag("reanalyze_audio_button")
+                    ) {
+                        Icon(Icons.Rounded.Refresh, contentDescription = "נתח סולם וקצב מחדש")
+                    }
+                }
+            }
+        }
 
         // 1. One-Click Offline Stem Separation Card
         Surface(

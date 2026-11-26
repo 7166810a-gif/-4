@@ -34,6 +34,7 @@ import androidx.compose.material.icons.rounded.FileOpen
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -53,6 +54,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +65,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -70,10 +73,13 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.data.AudioAnalysisResult
 import com.example.data.ExportBitrate
 import com.example.data.ExportFormat
 import com.example.data.StudioTab
+import com.example.data.VisualizerStyle
 import com.example.ui.StudioViewModel
+import com.example.ui.components.AdvancedSettingsBottomSheet
 import com.example.ui.components.ExportBottomSheet
 import com.example.ui.components.ProcessingOverlayModal
 import com.example.ui.components.TransportConsoleBar
@@ -86,6 +92,7 @@ import com.example.ui.theme.EmeraldDrum
 fun StudioRootScreen(viewModel: StudioViewModel) {
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
     val darkTheme by viewModel.darkTheme.collectAsStateWithLifecycle()
+    val advancedSettings by viewModel.advancedSettings.collectAsStateWithLifecycle()
     val tracks by viewModel.filteredTracks.collectAsStateWithLifecycle()
     val allTracks by viewModel.allTracks.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
@@ -97,8 +104,18 @@ fun StudioRootScreen(viewModel: StudioViewModel) {
     val rehearsal by viewModel.rehearsalState.collectAsStateWithLifecycle()
     val waveform by viewModel.waveformState.collectAsStateWithLifecycle()
     val liveWaveformState = viewModel.liveWaveform.collectAsStateWithLifecycle()
+    val stereoPeaksState = viewModel.stereoPeaks.collectAsStateWithLifecycle()
+    val analysisResult by viewModel.analysisResult.collectAsStateWithLifecycle()
     val processing by viewModel.processing.collectAsStateWithLifecycle()
     val showExportSheet by viewModel.showExportSheet.collectAsStateWithLifecycle()
+    val showSettingsSheet by viewModel.showSettingsSheet.collectAsStateWithLifecycle()
+    val cacheSizeMb by viewModel.cacheSizeMb.collectAsStateWithLifecycle()
+
+    val view = LocalView.current
+    DisposableEffect(view, advancedSettings.keepScreenOn) {
+        view.keepScreenOn = advancedSettings.keepScreenOn
+        onDispose { view.keepScreenOn = false }
+    }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -198,6 +215,15 @@ fun StudioRootScreen(viewModel: StudioViewModel) {
                                             contentDescription = "החלף מצב תצוגה"
                                         )
                                     }
+                                    IconButton(
+                                        onClick = { viewModel.setShowSettingsSheet(true) },
+                                        modifier = Modifier.minimumInteractiveComponentSize().testTag("topbar_settings_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Settings,
+                                            contentDescription = "הגדרות מתקדמות"
+                                        )
+                                    }
                                 },
                                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
                                     containerColor = MaterialTheme.colorScheme.surface
@@ -211,6 +237,7 @@ fun StudioRootScreen(viewModel: StudioViewModel) {
                                         TransportConsoleBar(
                                             playback = playback,
                                             hasAudio = true,
+                                            stereoPeaksProvider = { stereoPeaksState.value },
                                             onTogglePlay = { viewModel.togglePlayPause() },
                                             onStop = { viewModel.stopPlayback() },
                                             onSeek = { viewModel.seekToRatio(it) },
@@ -297,6 +324,8 @@ fun StudioRootScreen(viewModel: StudioViewModel) {
                                             eqFx = eqFx,
                                             rehearsal = rehearsal,
                                             waveform = waveform,
+                                            visualizerStyle = advancedSettings.visualizerStyle,
+                                            analysisResult = analysisResult,
                                             liveSamplesProvider = { liveWaveformState.value },
                                             onLaunchImport = {
                                                 importAudioLauncher.launch(arrayOf("audio/*", "application/ogg"))
@@ -335,6 +364,7 @@ fun StudioRootScreen(viewModel: StudioViewModel) {
                                         TransportConsoleBar(
                                             playback = playback,
                                             hasAudio = true,
+                                            stereoPeaksProvider = { stereoPeaksState.value },
                                             onTogglePlay = { viewModel.togglePlayPause() },
                                             onStop = { viewModel.stopPlayback() },
                                             onSeek = { viewModel.seekToRatio(it) },
@@ -368,6 +398,8 @@ fun StudioRootScreen(viewModel: StudioViewModel) {
                                             eqFx = eqFx,
                                             rehearsal = rehearsal,
                                             waveform = waveform,
+                                            visualizerStyle = advancedSettings.visualizerStyle,
+                                            analysisResult = analysisResult,
                                             liveSamplesProvider = { liveWaveformState.value },
                                             onLaunchImport = {
                                                 importAudioLauncher.launch(arrayOf("audio/*", "application/ogg"))
@@ -378,6 +410,7 @@ fun StudioRootScreen(viewModel: StudioViewModel) {
                                         TransportConsoleBar(
                                             playback = playback,
                                             hasAudio = true,
+                                            stereoPeaksProvider = { stereoPeaksState.value },
                                             onTogglePlay = { viewModel.togglePlayPause() },
                                             onStop = { viewModel.stopPlayback() },
                                             onSeek = { viewModel.seekToRatio(it) },
@@ -407,6 +440,23 @@ fun StudioRootScreen(viewModel: StudioViewModel) {
                     )
                 }
 
+                if (showSettingsSheet) {
+                    AdvancedSettingsBottomSheet(
+                        settings = advancedSettings,
+                        cacheSizeMb = cacheSizeMb,
+                        onDismiss = { viewModel.setShowSettingsSheet(false) },
+                        onToggleDarkTheme = viewModel::toggleDarkTheme,
+                        onKeepScreenOnChange = viewModel::updateKeepScreenOn,
+                        onLatencyModeChange = viewModel::updateLatencyMode,
+                        onDefaultQualityChange = viewModel::updateDefaultQuality,
+                        onVisualizerStyleChange = viewModel::updateVisualizerStyle,
+                        onOverdubCompChange = viewModel::updateOverdubLatencyComp,
+                        onAutoNormalizeRecChange = viewModel::updateAutoNormalizeRecording,
+                        onLimiterCeilingChange = viewModel::updateLimiterCeiling,
+                        onClearCache = viewModel::clearOrphanedCacheFiles
+                    )
+                }
+
                 ProcessingOverlayModal(progress = processing)
             }
         }
@@ -428,6 +478,8 @@ private fun ActiveTabContent(
     eqFx: com.example.data.EqAndFxState,
     rehearsal: com.example.data.RehearsalState,
     waveform: com.example.data.WaveformEditState,
+    visualizerStyle: VisualizerStyle,
+    analysisResult: AudioAnalysisResult,
     liveSamplesProvider: () -> FloatArray,
     onLaunchImport: () -> Unit
 ) {
@@ -443,11 +495,14 @@ private fun ActiveTabContent(
             onCreatePracticeLoopClick = viewModel::createBuiltInPracticeLoop,
             onGoToRecordClick = { viewModel.selectTab(StudioTab.REHEARSAL) },
             onSelectTrack = viewModel::loadTrackFromLibrary,
+            onRenameTrack = viewModel::renameTrack,
             onDeleteTrack = viewModel::deleteTrack
         )
         StudioTab.MIXER -> MixerScreen(
             hasAudio = hasAudio,
             isPlaying = playback.isPlaying,
+            visualizerStyle = visualizerStyle,
+            analysisResult = analysisResult,
             liveSamplesProvider = liveSamplesProvider,
             mixer = mixer,
             pitchTempo = pitchTempo,
@@ -462,6 +517,8 @@ private fun ActiveTabContent(
             onPitchFineCentsChange = viewModel::updatePitchFineCents,
             onTempoChange = viewModel::updateTempoRatio,
             onResetPitchTempo = viewModel::resetPitchTempo,
+            onSyncMetronomeToBpm = viewModel::syncMetronomeToDetectedBpm,
+            onReanalyzeTrack = viewModel::analyzeCurrentTrack,
             onGoToLibrary = { viewModel.selectTab(StudioTab.LIBRARY) }
         )
         StudioTab.WAVEFORM -> WaveformScreen(
@@ -476,8 +533,10 @@ private fun ActiveTabContent(
             onSelectionChange = viewModel::updateSelection,
             onTrim = viewModel::trimToSelection,
             onCut = viewModel::cutOutSelection,
+            onFadeDurationChange = viewModel::updateFadeDuration,
             onFadeIn = viewModel::applyFadeIn,
             onFadeOut = viewModel::applyFadeOut,
+            onAutoTrimSilence = viewModel::autoTrimSilence,
             onMergeTrack = viewModel::mergeWithTrack,
             onUndo = viewModel::undoWaveformEdit,
             onRedo = viewModel::redoWaveformEdit,
@@ -491,12 +550,15 @@ private fun ActiveTabContent(
             onSelectEqPreset = viewModel::applyEqPreset,
             onToggleAutoNormalize = viewModel::toggleAutoNormalize,
             onReverbChange = viewModel::updateReverbMix,
-            onDelayChange = viewModel::updateDelayMix
+            onDelayChange = viewModel::updateDelayMix,
+            onStereoWidthChange = viewModel::updateStereoWidth,
+            onToggleHighPass80Hz = viewModel::toggleHighPass80Hz
         )
         StudioTab.REHEARSAL -> RehearsalScreen(
             hasAudio = hasAudio,
             playback = playback,
             rehearsal = rehearsal,
+            visualizerStyle = visualizerStyle,
             liveSamplesProvider = liveSamplesProvider,
             onSetLoopA = viewModel::setLoopAFromCurrent,
             onSetLoopB = viewModel::setLoopBFromCurrent,

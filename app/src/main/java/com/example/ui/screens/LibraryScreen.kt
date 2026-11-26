@@ -26,11 +26,14 @@ import androidx.compose.material.icons.rounded.AddCircleOutline
 import androidx.compose.material.icons.rounded.AudioFile
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FileOpen
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.OfflineBolt
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
@@ -41,9 +44,14 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -77,9 +85,13 @@ fun LibraryScreen(
     onCreatePracticeLoopClick: () -> Unit,
     onGoToRecordClick: () -> Unit,
     onSelectTrack: (TrackEntity) -> Unit,
+    onRenameTrack: (TrackEntity, String) -> Unit,
     onDeleteTrack: (TrackEntity) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var trackToRename by remember { mutableStateOf<TrackEntity?>(null) }
+    var renameDraft by remember { mutableStateOf("") }
+    var trackForDetails by remember { mutableStateOf<TrackEntity?>(null) }
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -371,21 +383,112 @@ fun LibraryScreen(
                             }
                         }
 
-                        IconButton(
-                            onClick = { onDeleteTrack(track) },
-                            modifier = Modifier
-                                .minimumInteractiveComponentSize()
-                                .testTag("delete_track_${track.id}")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.DeleteOutline,
-                                contentDescription = "מחק רצועה",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = { trackForDetails = track },
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("info_track_${track.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Info,
+                                    contentDescription = "פרטי רצועה",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    renameDraft = track.title
+                                    trackToRename = track
+                                },
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("rename_track_${track.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Edit,
+                                    contentDescription = "שנה שם רצועה",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            IconButton(
+                                onClick = { onDeleteTrack(track) },
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("delete_track_${track.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.DeleteOutline,
+                                    contentDescription = "מחק רצועה",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    trackToRename?.let { target ->
+        AlertDialog(
+            onDismissRequest = { trackToRename = null },
+            title = { Text("שינוי שם רצועה") },
+            text = {
+                OutlinedTextField(
+                    value = renameDraft,
+                    onValueChange = { renameDraft = it },
+                    label = { Text("שם הרצועה") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("rename_track_input")
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onRenameTrack(target, renameDraft)
+                        trackToRename = null
+                    },
+                    enabled = renameDraft.isNotBlank()
+                ) {
+                    Text("שמור")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { trackToRename = null }) { Text("ביטול") }
+            }
+        )
+    }
+
+    trackForDetails?.let { info ->
+        val categoryLabel = when (info.category) {
+            "PLAYBACK" -> "פלייבק שיוצא"
+            "RECORDING" -> "הקלטה מקומית"
+            else -> "שיר שיובא"
+        }
+        AlertDialog(
+            onDismissRequest = { trackForDetails = null },
+            title = { Text(info.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("קטגוריה: $categoryLabel", style = MaterialTheme.typography.bodyMedium)
+                    Text("פורמט מקור: ${info.format}", style = MaterialTheme.typography.bodyMedium)
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        Text(
+                            "אורך: ${formatTimeMs(info.durationMs)} • ${info.sampleRate} Hz",
+                            style = StudioMonoStyle,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Text(
+                        if (info.stemsSeparated) "ערוצים: מופרד ל-4 ערוצים (Stems)" else "ערוצים: רצועת סטריאו מאוחדת",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { trackForDetails = null }) { Text("סגור") }
+            }
+        )
     }
 }

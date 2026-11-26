@@ -38,6 +38,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.example.audio.AudioEngineController
+import com.example.data.VisualizerStyle
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.EmeraldDrum
 import com.example.ui.theme.StudioMonoStyle
@@ -58,6 +59,7 @@ import kotlin.math.abs
 fun RealtimeWaveformCanvas(
     samplesProvider: () -> FloatArray,
     isActive: Boolean,
+    style: VisualizerStyle = VisualizerStyle.HYBRID,
     labelHe: String = "תצוגת גל קול בזמן אמת",
     modifier: Modifier = Modifier
 ) {
@@ -139,6 +141,9 @@ fun RealtimeWaveformCanvas(
                         val waveBrush = Brush.horizontalGradient(
                             colors = listOf(ElectricCyan, StudioViolet, WarmAmber)
                         )
+                        val barsBrush = Brush.verticalGradient(
+                            colors = listOf(ElectricCyan, StudioViolet, ElectricCyan)
+                        )
                         val areaBrush = Brush.verticalGradient(
                             colors = listOf(
                                 primaryColor.copy(alpha = 0.28f),
@@ -162,7 +167,7 @@ fun RealtimeWaveformCanvas(
                             if (count < 2) return@onDrawBehind
 
                             val dx = w / (count - 1).toFloat()
-                            val barWidth = (dx * 0.48f).coerceAtLeast(1.5.dp.toPx())
+                            val barWidth = (dx * 0.56f).coerceAtLeast(1.8.dp.toPx())
                             val maxAmp = h * 0.44f
 
                             // 3. Smooth samples in-place (attack fast, release smooth)
@@ -176,14 +181,17 @@ fun RealtimeWaveformCanvas(
                                 }
                             }
 
-                            // 4. Draw vertical energy capsules + build oscilloscope path
-                            oscPath.reset()
-                            fillPath.reset()
+                            val drawBars = style != VisualizerStyle.WAVE
+                            val drawWave = style != VisualizerStyle.BARS
 
-                            val firstY = centerY - smoothedSamples[0] * maxAmp
-                            oscPath.moveTo(0f, firstY)
-                            fillPath.moveTo(0f, centerY)
-                            fillPath.lineTo(0f, firstY)
+                            if (drawWave) {
+                                oscPath.reset()
+                                fillPath.reset()
+                                val firstY = centerY - smoothedSamples[0] * maxAmp
+                                oscPath.moveTo(0f, firstY)
+                                fillPath.moveTo(0f, centerY)
+                                fillPath.lineTo(0f, firstY)
+                            }
 
                             for (i in 0 until count) {
                                 val x = i * dx
@@ -191,16 +199,28 @@ fun RealtimeWaveformCanvas(
                                 val y = centerY - sample * maxAmp
                                 val mag = (abs(sample) * maxAmp).coerceAtLeast(2.dp.toPx())
 
-                                // Fast mirrored capsule bar
-                                drawLine(
-                                    color = if (isActive) barColorActive else barColorIdle,
-                                    start = Offset(x, centerY - mag),
-                                    end = Offset(x, centerY + mag),
-                                    strokeWidth = barWidth,
-                                    cap = StrokeCap.Round
-                                )
+                                if (drawBars) {
+                                    if (style == VisualizerStyle.BARS) {
+                                        drawLine(
+                                            brush = barsBrush,
+                                            alpha = if (isActive) 0.92f else 0.32f,
+                                            start = Offset(x, centerY - mag),
+                                            end = Offset(x, centerY + mag),
+                                            strokeWidth = barWidth,
+                                            cap = StrokeCap.Round
+                                        )
+                                    } else {
+                                        drawLine(
+                                            color = if (isActive) barColorActive else barColorIdle,
+                                            start = Offset(x, centerY - mag),
+                                            end = Offset(x, centerY + mag),
+                                            strokeWidth = barWidth * 0.85f,
+                                            cap = StrokeCap.Round
+                                        )
+                                    }
+                                }
 
-                                if (i > 0) {
+                                if (drawWave && i > 0) {
                                     val prevX = (i - 1) * dx
                                     val prevY = centerY - smoothedSamples[i - 1] * maxAmp
                                     val midX = (prevX + x) * 0.5f
@@ -209,12 +229,12 @@ fun RealtimeWaveformCanvas(
                                 }
                             }
 
-                            fillPath.lineTo(w, centerY)
-                            fillPath.close()
-
-                            // 5. Render filled envelope + glowing oscilloscope trace
-                            drawPath(path = fillPath, brush = areaBrush)
-                            drawPath(path = oscPath, brush = waveBrush, style = strokeStyle)
+                            if (drawWave) {
+                                fillPath.lineTo(w, centerY)
+                                fillPath.close()
+                                drawPath(path = fillPath, brush = areaBrush)
+                                drawPath(path = oscPath, brush = waveBrush, style = strokeStyle)
+                            }
                         }
                     }
             )

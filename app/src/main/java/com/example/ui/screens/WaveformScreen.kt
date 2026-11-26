@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.rounded.Redo
 import androidx.compose.material.icons.automirrored.rounded.TrendingDown
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.automirrored.rounded.Undo
+import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.Crop
 import androidx.compose.material.icons.rounded.ZoomIn
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.rounded.ZoomOut
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -75,8 +77,10 @@ fun WaveformScreen(
     onSelectionChange: (Float, Float) -> Unit,
     onTrim: () -> Unit,
     onCut: () -> Unit,
+    onFadeDurationChange: (Float) -> Unit,
     onFadeIn: () -> Unit,
     onFadeOut: () -> Unit,
+    onAutoTrimSilence: () -> Unit,
     onMergeTrack: (TrackEntity) -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
@@ -271,6 +275,25 @@ fun WaveformScreen(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("משך דעיכה:", style = MaterialTheme.typography.labelLarge)
+                listOf(1f, 2f, 4f, 6f).forEach { sec ->
+                    FilterChip(
+                        selected = kotlin.math.abs(waveform.fadeDurationSec - sec) < 0.2f,
+                        onClick = { onFadeDurationChange(sec) },
+                        label = {
+                            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                                Text("${sec.toInt()}s")
+                            }
+                        }
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 OutlinedButton(
@@ -280,7 +303,7 @@ fun WaveformScreen(
                 ) {
                     Icon(Icons.AutoMirrored.Rounded.TrendingUp, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Fade In")
+                    Text("Fade In (${waveform.fadeDurationSec.toInt()}s)")
                 }
                 OutlinedButton(
                     onClick = onFadeOut,
@@ -289,8 +312,18 @@ fun WaveformScreen(
                 ) {
                     Icon(Icons.AutoMirrored.Rounded.TrendingDown, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Fade Out")
+                    Text("Fade Out (${waveform.fadeDurationSec.toInt()}s)")
                 }
+            }
+
+            OutlinedButton(
+                onClick = onAutoTrimSilence,
+                modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize().testTag("waveform_auto_trim_silence_button"),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Icon(Icons.Rounded.AutoFixHigh, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("הסר שקט מהתחלה ומהסוף אוטומטית")
             }
 
             FilledTonalButton(

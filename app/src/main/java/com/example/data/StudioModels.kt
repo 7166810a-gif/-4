@@ -21,6 +21,18 @@ enum class ProcessingQuality(val titleHe: String, val fftSize: Int, val hopSize:
     MAX_QUALITY("איכות מקסימלית", 4096, 512)
 }
 
+enum class AudioLatencyMode(val titleHe: String, val bufferMultiplier: Int) {
+    ULTRA_LOW("אולטרה-מהיר (Low Latency)", 1),
+    BALANCED("מאוזן (מומלץ)", 2),
+    HIGH_STABILITY("יציב (High Buffer)", 4)
+}
+
+enum class VisualizerStyle(val titleHe: String) {
+    HYBRID("אוסילוסקופ + עמודות"),
+    BARS("עמודות אנרגיה"),
+    WAVE("גל קלאסי")
+}
+
 enum class EqPreset(
     val titleHe: String,
     val bassDb: Float,
@@ -78,6 +90,24 @@ class StemSet(
     val frameCount: Int get() = vocalsLeft.size
 }
 
+data class AudioAnalysisResult(
+    val detectedBpm: Int = 0,
+    val rootPitchClass: Int = -1, // 0=C .. 11=B
+    val isMinor: Boolean = false,
+    val detectedKeyLabel: String = "—"
+)
+
+data class AdvancedSettings(
+    val darkTheme: Boolean = true,
+    val keepScreenOn: Boolean = true,
+    val latencyMode: AudioLatencyMode = AudioLatencyMode.BALANCED,
+    val defaultQuality: ProcessingQuality = ProcessingQuality.MAX_QUALITY,
+    val visualizerStyle: VisualizerStyle = VisualizerStyle.HYBRID,
+    val overdubLatencyCompMs: Int = 35, // -120 .. +120 ms
+    val autoNormalizeRecording: Boolean = true,
+    val limiterCeilingDb: Float = -0.5f // -3.0 .. -0.1 dB
+)
+
 data class MixerState(
     val stemsSeparated: Boolean = false,
     val vocalsGain: Float = 1f,
@@ -112,8 +142,10 @@ data class EqAndFxState(
     val trebleDb: Float = 0f,
     val activeEqPreset: EqPreset = EqPreset.BALANCED,
     val autoNormalizeLimiter: Boolean = true,
-    val reverbMix: Float = 0f,      // 0f .. 0.6f
-    val delayMix: Float = 0f        // 0f .. 0.5f
+    val reverbMix: Float = 0f,       // 0f .. 0.6f
+    val delayMix: Float = 0f,        // 0f .. 0.5f
+    val stereoWidth: Float = 1.0f,   // 0f (Mono) .. 1.6f (Wide)
+    val highPass80Hz: Boolean = false
 )
 
 data class RehearsalState(
@@ -135,6 +167,7 @@ data class WaveformEditState(
     val scrollOffsetRatio: Float = 0f,
     val selectionStartRatio: Float = 0.1f,
     val selectionEndRatio: Float = 0.9f,
+    val fadeDurationSec: Float = 2.0f,
     val canUndo: Boolean = false,
     val canRedo: Boolean = false,
     val waveformPeaks: List<Float> = emptyList()

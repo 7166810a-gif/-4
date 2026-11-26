@@ -19,20 +19,25 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AudioFile
+import androidx.compose.material.icons.rounded.CleaningServices
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -41,10 +46,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -55,6 +65,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -69,15 +80,22 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.data.AdvancedSettings
+import com.example.data.AudioLatencyMode
 import com.example.data.ExportBitrate
 import com.example.data.ExportFormat
 import com.example.data.PlaybackUiState
 import com.example.data.ProcessingProgress
+import com.example.data.ProcessingQuality
+import com.example.data.VisualizerStyle
 import com.example.ui.theme.ElectricCyan
+import com.example.ui.theme.EmeraldDrum
+import com.example.ui.theme.PeakRed
 import com.example.ui.theme.StudioMonoStyle
 import com.example.ui.theme.StudioViolet
 import com.example.ui.theme.WarmAmber
 import java.util.Locale
+import kotlin.math.roundToInt
 
 fun formatTimeMs(ms: Long): String {
     val safe = ms.coerceAtLeast(0L)
@@ -231,9 +249,69 @@ fun WaveformCanvas(
 }
 
 @Composable
+fun StereoPeakMeterBar(
+    peaksProvider: () -> Pair<Float, Float>,
+    isActive: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val trackBg = MaterialTheme.colorScheme.surfaceVariant
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Row(
+            modifier = modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text("L/R", style = StudioMonoStyle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(12.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0xFF0A0F19))
+                    .drawWithCache {
+                        val w = size.width
+                        val h = size.height
+                        val rowH = (h - 2.dp.toPx()) / 2f
+                        val segments = 24
+                        val gap = 2.dp.toPx()
+                        val segW = ((w - gap * (segments - 1)) / segments).coerceAtLeast(1f)
+                        val r = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+
+                        onDrawBehind {
+                            val (leftPeak, rightPeak) = if (isActive) peaksProvider() else (0f to 0f)
+                            for (i in 0 until segments) {
+                                val thresh = (i + 1) / segments.toFloat()
+                                val x = i * (segW + gap)
+                                val activeColor = when {
+                                    i >= segments - 2 -> PeakRed
+                                    i >= segments - 6 -> WarmAmber
+                                    else -> EmeraldDrum
+                                }
+                                drawRoundRect(
+                                    color = if (leftPeak >= thresh - 0.02f) activeColor else trackBg.copy(alpha = 0.45f),
+                                    topLeft = Offset(x, 0f),
+                                    size = Size(segW, rowH),
+                                    cornerRadius = r
+                                )
+                                drawRoundRect(
+                                    color = if (rightPeak >= thresh - 0.02f) activeColor else trackBg.copy(alpha = 0.45f),
+                                    topLeft = Offset(x, rowH + 2.dp.toPx()),
+                                    size = Size(segW, rowH),
+                                    cornerRadius = r
+                                )
+                            }
+                        }
+                    }
+            )
+        }
+    }
+}
+
+@Composable
 fun TransportConsoleBar(
     playback: PlaybackUiState,
     hasAudio: Boolean,
+    stereoPeaksProvider: () -> Pair<Float, Float> = { 0f to 0f },
     onTogglePlay: () -> Unit,
     onStop: () -> Unit,
     onSeek: (Float) -> Unit,
@@ -352,6 +430,11 @@ fun TransportConsoleBar(
             }
 
             if (hasAudio) {
+                Spacer(Modifier.height(6.dp))
+                StereoPeakMeterBar(
+                    peaksProvider = stereoPeaksProvider,
+                    isActive = playback.isPlaying
+                )
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                     Slider(
                         value = playback.progressRatio,
@@ -551,5 +634,238 @@ fun ExportBottomSheet(
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AdvancedSettingsBottomSheet(
+    settings: AdvancedSettings,
+    cacheSizeMb: Float,
+    onDismiss: () -> Unit,
+    onToggleDarkTheme: () -> Unit,
+    onKeepScreenOnChange: (Boolean) -> Unit,
+    onLatencyModeChange: (AudioLatencyMode) -> Unit,
+    onDefaultQualityChange: (ProcessingQuality) -> Unit,
+    onVisualizerStyleChange: (VisualizerStyle) -> Unit,
+    onOverdubCompChange: (Int) -> Unit,
+    onAutoNormalizeRecChange: (Boolean) -> Unit,
+    onLimiterCeilingChange: (Float) -> Unit,
+    onClearCache: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Rounded.Tune, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Text("הגדרות ואפשרויות מתקדמות", style = MaterialTheme.typography.titleLarge)
+                }
+                TextButton(onClick = onDismiss) { Text("סגור") }
+            }
+
+            // Display & Stage Behavior
+            SettingSwitchRow(
+                title = "מצב תצוגה כהה (Dark Mode)",
+                subtitle = "נוח לחדרי חזרות חשוכים ובמה",
+                checked = settings.darkTheme,
+                onCheckedChange = { onToggleDarkTheme() },
+                tag = "settings_dark_theme_switch"
+            )
+            SettingSwitchRow(
+                title = "השאר מסך דולק בחזרות",
+                subtitle = "מונע כיבוי מסך בזמן נגינה או שירה",
+                checked = settings.keepScreenOn,
+                onCheckedChange = onKeepScreenOnChange,
+                tag = "settings_keep_screen_on_switch"
+            )
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
+            // Audio Buffer Latency Mode
+            Text("מצב חביון וזיכרון אודיו (Audio Latency)", style = MaterialTheme.typography.titleSmall)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                AudioLatencyMode.entries.forEach { mode ->
+                    val selected = settings.latencyMode == mode
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(
+                                1.dp,
+                                if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                RoundedCornerShape(12.dp)
+                            )
+                            .clickable { onLatencyModeChange(mode) }
+                            .testTag("settings_latency_${mode.name.lowercase()}")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(mode.titleHe, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                                Text("x${mode.bufferMultiplier}", style = StudioMonoStyle, color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Default Separation Quality
+            Text("איכות הפרדת ערוצים כברירת מחדל", style = MaterialTheme.typography.titleSmall)
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                ProcessingQuality.entries.forEachIndexed { idx, q ->
+                    SegmentedButton(
+                        selected = settings.defaultQuality == q,
+                        onClick = { onDefaultQualityChange(q) },
+                        shape = SegmentedButtonDefaults.itemShape(idx, ProcessingQuality.entries.size)
+                    ) {
+                        Text(q.titleHe)
+                    }
+                }
+            }
+
+            // Live Visualizer Style
+            Text("סגנון תצוגת גל הקול החי", style = MaterialTheme.typography.titleSmall)
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                VisualizerStyle.entries.forEachIndexed { idx, st ->
+                    SegmentedButton(
+                        selected = settings.visualizerStyle == st,
+                        onClick = { onVisualizerStyleChange(st) },
+                        shape = SegmentedButtonDefaults.itemShape(idx, VisualizerStyle.entries.size)
+                    ) {
+                        Text(st.titleHe, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
+            // Overdub Latency Compensation
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("פיצוי השהיית הקלטת Overdub", style = MaterialTheme.typography.titleSmall)
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        val sign = if (settings.overdubLatencyCompMs > 0) "+" else ""
+                        Text("${sign}${settings.overdubLatencyCompMs} ms", style = StudioMonoStyle, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    Slider(
+                        value = settings.overdubLatencyCompMs.toFloat(),
+                        onValueChange = { onOverdubCompChange(it.roundToInt()) },
+                        valueRange = -120f..120f,
+                        modifier = Modifier.fillMaxWidth().testTag("settings_overdub_comp_slider")
+                    )
+                }
+            }
+
+            SettingSwitchRow(
+                title = "נירמול עוצמה אוטומטי להקלטה",
+                subtitle = "מאזן הקלטות מיקרופון שקטות מיידית בסיום ההקלטה",
+                checked = settings.autoNormalizeRecording,
+                onCheckedChange = onAutoNormalizeRecChange,
+                tag = "settings_auto_norm_rec_switch"
+            )
+
+            // Master Limiter Ceiling
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("תקרת מגביל עיוותים (Limiter Ceiling)", style = MaterialTheme.typography.titleSmall)
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        Text(
+                            String.format(Locale.US, "%.1f dB", settings.limiterCeilingDb),
+                            style = StudioMonoStyle,
+                            color = WarmAmber
+                        )
+                    }
+                }
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    Slider(
+                        value = settings.limiterCeilingDb,
+                        onValueChange = onLimiterCeilingChange,
+                        valueRange = -3.0f..-0.1f,
+                        modifier = Modifier.fillMaxWidth().testTag("settings_limiter_ceiling_slider")
+                    )
+                }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
+            // Local Cache Cleanup
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("אחסון וזיכרון מטמון מקומי", style = MaterialTheme.typography.titleSmall)
+                        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                            Text(
+                                String.format(Locale.US, "%.1f MB בשימוש", cacheSizeMb),
+                                style = StudioMonoStyle,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = onClearCache,
+                        modifier = Modifier.minimumInteractiveComponentSize().testTag("settings_clear_cache_button")
+                    ) {
+                        Icon(Icons.Rounded.CleaningServices, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("נקה מטמון")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingSwitchRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    tag: String
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.testTag(tag)
+        )
     }
 }

@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Equalizer
+import androidx.compose.material.icons.rounded.FilterAlt
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.SurroundSound
 import androidx.compose.material3.FilterChip
@@ -63,6 +64,8 @@ fun EffectsScreen(
     onToggleAutoNormalize: (Boolean) -> Unit,
     onReverbChange: (Float) -> Unit,
     onDelayChange: (Float) -> Unit,
+    onStereoWidthChange: (Float) -> Unit,
+    onToggleHighPass80Hz: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -132,6 +135,26 @@ fun EffectsScreen(
                             drawCircle(ElectricCyan, 5.dp.toPx(), Offset(w * 0.50f, yMid))
                             drawCircle(StudioViolet, 5.dp.toPx(), Offset(w * 0.86f, yTreble))
                         }
+                        Text(
+                            "+12dB",
+                            style = StudioMonoStyle,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.align(Alignment.TopStart).padding(6.dp)
+                        )
+                        Text(
+                            "-12dB",
+                            style = StudioMonoStyle,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.align(Alignment.BottomStart).padding(6.dp)
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("120Hz", style = StudioMonoStyle, color = WarmAmber)
+                        Text("1.2kHz", style = StudioMonoStyle, color = ElectricCyan)
+                        Text("6.5kHz", style = StudioMonoStyle, color = StudioViolet)
                     }
                 }
 
@@ -215,6 +238,68 @@ fun EffectsScreen(
 
                 SpaceEffectSlider("הדהוד אולם (Reverb)", fx.reverbMix / 0.6f, StudioViolet, { onReverbChange(it * 0.6f) }, "fx_reverb_slider")
                 SpaceEffectSlider("דיליי סטריאופוני (Delay)", fx.delayMix / 0.5f, ElectricCyan, { onDelayChange(it * 0.5f) }, "fx_delay_slider")
+
+                // Stereo Width Slider (0% Mono .. 100% Normal .. 160% Wide)
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    val widthLabel = when {
+                        fx.stereoWidth < 0.15f -> "מונו (Mono)"
+                        fx.stereoWidth > 1.15f -> "רחב (Wide Stage)"
+                        else -> "טבעי (Normal)"
+                    }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("רוחב סטריאו ($widthLabel)", style = MaterialTheme.typography.bodyMedium)
+                        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                            Text("${(fx.stereoWidth * 100).roundToInt()}%", style = StudioMonoStyle, color = WarmAmber)
+                        }
+                    }
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        Slider(
+                            value = fx.stereoWidth,
+                            onValueChange = onStereoWidthChange,
+                            valueRange = 0f..1.6f,
+                            colors = SliderDefaults.colors(thumbColor = WarmAmber, activeTrackColor = WarmAmber),
+                            modifier = Modifier.fillMaxWidth().height(32.dp).testTag("fx_stereo_width_slider")
+                        )
+                    }
+                }
+            }
+        }
+
+        // 4. 80Hz High-Pass Rumble Filter Card
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(Icons.Rounded.FilterAlt, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(28.dp))
+                    Column {
+                        Text("מסנן תדרי רעם (80Hz High-Pass)", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "מנקה רעשי רוח, מיקרופון ורעידות תת-בס להגברה נקייה על במה",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Switch(
+                    checked = fx.highPass80Hz,
+                    onCheckedChange = onToggleHighPass80Hz,
+                    modifier = Modifier.testTag("fx_high_pass_switch")
+                )
             }
         }
     }

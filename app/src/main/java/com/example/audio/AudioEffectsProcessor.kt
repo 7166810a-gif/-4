@@ -11,12 +11,15 @@ import kotlin.math.tanh
 
 /**
  * Real-time Stereo Studio DSP Chain:
- * 1. 3-Band Biquad EQ (Low Shelf @ 120 Hz, Mid Peak @ 1.2 kHz, High Shelf @ 6.5 kHz)
- * 2. Stereo Reverb (4-comb Schroeder + allpass diffusion)
- * 3. Stereo Slapback / Echo Delay
- * 4. Auto-Normalize RMS Gain + Soft-Clip Brickwall Limiter (prevents clipping)
+ * 1. Optional 80 Hz High-Pass Rumble Filter (for clean vocals & stage PA clarity)
+ * 2. 3-Band Biquad EQ (Low Shelf @ 120 Hz, Mid Peak @ 1.2 kHz, High Shelf @ 6.5 kHz)
+ * 3. Mid-Side Stereo Width (0% Mono .. 100% Natural .. 160% Wide Stage)
+ * 4. Stereo Delay & Schroeder Reverb
+ * 5. Auto-Normalize RMS Gain + Configurable Soft-Clip Brickwall Limiter Ceiling
  */
 class AudioEffectsProcessor(private val sampleRate: Int = 44100) {
+    private val hpfL = BiquadFilter().apply { setHighPass(80.0, sampleRate.toDouble(), 0.707) }
+    private val hpfR = BiquadFilter().apply { copyFrom(hpfL) }
     private val lowL = BiquadFilter()
     private val lowR = BiquadFilter()
     private val midL = BiquadFilter()
@@ -24,7 +27,7 @@ class AudioEffectsProcessor(private val sampleRate: Int = 44100) {
     private val highL = BiquadFilter()
     private val highR = BiquadFilter()
 
-    // Delay line (320ms L, 410ms R)
+    // Delay line (280ms L, 370ms R)
     private val delaySizeL = (sampleRate * 0.28).toInt()
     private val delaySizeR = (sampleRate * 0.37).toInt()
     private val delayBufL = FloatArray(delaySizeL)
@@ -45,13 +48,13 @@ class AudioEffectsProcessor(private val sampleRate: Int = 44100) {
     private val combIdxR = IntArray(4)
     private val combFb = floatArrayOf(0.805f, 0.827f, 0.783f, 0.764f)
 
-    // Auto-normalize envelope follower
     private var rmsEnvelope = 0.2f
     private var lastBassDb = Float.NaN
     private var lastMidDb = Float.NaN
     private var lastTrebleDb = Float.NaN
 
     fun reset() {
+        hpfL.reset(); hpfR.reset()
         lowL.reset(); lowR.reset()
         midL.reset(); midR.reset()
         highL.reset(); highR.reset()
@@ -65,25 +68,42 @@ class AudioEffectsProcessor(private val sampleRate: Int = 44100) {
         left: FloatArray,
         right: FloatArray,
         frames: Int,
-        fx: EqAndFxState
+        fx: EqAndFxState,
+        limiterCeilingDb: Float = -0.5f
     ) {
         updateCoefficientsIfNeeded(fx)
 
         val reverbWet = fx.reverbMix.coerceIn(0f, 0.65f)
         val delayWet = fx.delayMix.coerceIn(0f, 0.55f)
+        val width = fx.stereoWidth.coerceIn(0f, 1.6f)
         val applyEq = abs(fx.bassDb) > 0.05f || abs(fx.midDb) > 0.05f || abs(fx.trebleDb) > 0.05f
+        val ceilingLinear = 10.0.pow(limiterCeilingDb.coerceIn(-3.0f, -0.05f) / 20.0).toFloat()
 
         for (i in 0 until frames) {
             var l = left[i]
             var r = right[i]
 
-            // 1. 3-Band EQ
+            // 1. Optional 80Hz High-Pass Rumble Filter
+            if (fx.highPass80Hz) {
+                l = hpfL.process(l)
+                r = hpfR.process(r)
+            }
+
+            // 2. 3-Band EQ
             if (applyEq) {
                 l = highL.process(midL.process(lowL.process(l)))
                 r = highR.process(midR.process(lowR.process(r)))
             }
 
-            // 2. Stereo Delay
+            // 3. Mid-Side Stereo Width
+            if (abs(width - 1.0f) > 0.01f) {
+                val mid = 0.5f * (l + r)
+                val side = 0.5f * (l - r) * width
+                l = mid + side
+                r = mid - side
+            }
+
+            // 4. Stereo Delay
             if (delayWet > 0.005f) {
                 val dL = delayBufL[delayIdxL]
                 val dR = delayBufR[delayIdxR]
@@ -95,7 +115,7 @@ class AudioEffectsProcessor(private val sampleRate: Int = 44100) {
                 r += dR * delayWet
             }
 
-            // 3. Stereo Schroeder Reverb
+            // 5. Stereo Schroeder Reverb
             if (reverbWet > 0.005f) {
                 var revL = 0f
                 var revR = 0f
@@ -118,14 +138,14 @@ class AudioEffectsProcessor(private val sampleRate: Int = 44100) {
                 r = r * (1f - reverbWet * 0.3f) + (revR * 0.25f) * reverbWet
             }
 
-            // 4. Auto-Normalize & Soft-Clip Brickwall Limiter
+            // 6. Auto-Normalize & Soft-Clip Brickwall Limiter
             if (fx.autoNormalizeLimiter) {
                 val energy = 0.5f * (l * l + r * r)
                 rmsEnvelope = rmsEnvelope * 0.9992f + energy * 0.0008f
                 val rms = sqrt(rmsEnvelope.coerceAtLeast(1e-5f))
                 val targetGain = (0.24f / rms).coerceIn(0.65f, 2.0f)
-                l = softLimit(l * targetGain)
-                r = softLimit(r * targetGain)
+                l = softLimit(l * targetGain, ceilingLinear)
+                r = softLimit(r * targetGain, ceilingLinear)
             } else {
                 l = l.coerceIn(-1f, 1f)
                 r = r.coerceIn(-1f, 1f)
@@ -136,13 +156,15 @@ class AudioEffectsProcessor(private val sampleRate: Int = 44100) {
         }
     }
 
-    private fun softLimit(x: Float): Float {
-        return if (abs(x) <= 0.85f) {
+    private fun softLimit(x: Float, ceiling: Float): Float {
+        val knee = ceiling * 0.85f
+        return if (abs(x) <= knee) {
             x
         } else {
             val sign = if (x >= 0f) 1f else -1f
-            val excess = abs(x) - 0.85f
-            sign * (0.85f + 0.14f * tanh(excess / 0.15f))
+            val excess = abs(x) - knee
+            val headroom = (ceiling - knee).coerceAtLeast(0.02f)
+            sign * (knee + headroom * tanh(excess / headroom))
         }
     }
 
@@ -181,6 +203,18 @@ class AudioEffectsProcessor(private val sampleRate: Int = 44100) {
             z1 = b1 * x - a1 * y + z2
             z2 = b2 * x - a2 * y
             return y
+        }
+
+        fun setHighPass(freq: Double, sr: Double, q: Double) {
+            val w0 = 2.0 * PI * freq / sr
+            val cosW = cos(w0)
+            val alpha = sin(w0) / (2.0 * q)
+            val a0 = 1.0 + alpha
+            b0 = ((1.0 + cosW) / 2.0 / a0).toFloat()
+            b1 = (-(1.0 + cosW) / a0).toFloat()
+            b2 = ((1.0 + cosW) / 2.0 / a0).toFloat()
+            a1 = ((-2.0 * cosW) / a0).toFloat()
+            a2 = ((1.0 - alpha) / a0).toFloat()
         }
 
         fun setLowShelf(freq: Double, sr: Double, gainDb: Double) {

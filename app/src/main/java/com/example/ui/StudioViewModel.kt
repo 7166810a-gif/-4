@@ -4,10 +4,14 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.audio.AudioAnalyzer
 import com.example.audio.AudioDecoder
 import com.example.audio.AudioEngineController
 import com.example.audio.AudioExporter
 import com.example.audio.StemSeparatorEngine
+import com.example.data.AdvancedSettings
+import com.example.data.AudioAnalysisResult
+import com.example.data.AudioLatencyMode
 import com.example.data.EqAndFxState
 import com.example.data.EqPreset
 import com.example.data.ExportBitrate
@@ -21,9 +25,11 @@ import com.example.data.ProcessingQuality
 import com.example.data.RehearsalState
 import com.example.data.StemPreset
 import com.example.data.StudioDatabase
+import com.example.data.StudioSettingsStore
 import com.example.data.StudioTab
 import com.example.data.TrackEntity
 import com.example.data.TrackRepository
+import com.example.data.VisualizerStyle
 import com.example.data.WaveformEditState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -43,15 +49,19 @@ import java.util.UUID
 
 class StudioViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = TrackRepository(StudioDatabase.getInstance(application).trackDao())
+    private val settingsStore = StudioSettingsStore(application)
     private val engine = AudioEngineController()
 
     private val studioDir = File(application.filesDir, "studio_audio").apply { mkdirs() }
     private val exportDir = File(application.filesDir, "studio_exports").apply { mkdirs() }
 
+    private val _advancedSettings = MutableStateFlow(settingsStore.load())
+    val advancedSettings: StateFlow<AdvancedSettings> = _advancedSettings.asStateFlow()
+
     private val _selectedTab = MutableStateFlow(StudioTab.LIBRARY)
     val selectedTab: StateFlow<StudioTab> = _selectedTab.asStateFlow()
 
-    private val _darkTheme = MutableStateFlow(true)
+    private val _darkTheme = MutableStateFlow(_advancedSettings.value.darkTheme)
     val darkTheme: StateFlow<Boolean> = _darkTheme.asStateFlow()
 
     private val _searchQuery = MutableStateFlow("")
@@ -131,6 +141,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), RehearsalState())
 
     val liveWaveform: StateFlow<FloatArray> = engine.liveWaveform
+    val stereoPeaks: StateFlow<Pair<Float, Float>> = engine.stereoPeaks
+
+    private val _analysisResult = MutableStateFlow(AudioAnalysisResult())
+    val analysisResult: StateFlow<AudioAnalysisResult> = _analysisResult.asStateFlow()
 
     private val _waveformState = MutableStateFlow(WaveformEditState())
     val waveformState: StateFlow<WaveformEditState> = _waveformState.asStateFlow()
@@ -141,17 +155,83 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     private val _showExportSheet = MutableStateFlow(false)
     val showExportSheet: StateFlow<Boolean> = _showExportSheet.asStateFlow()
 
+    private val _showSettingsSheet = MutableStateFlow(false)
+    val showSettingsSheet: StateFlow<Boolean> = _showSettingsSheet.asStateFlow()
+
+    private val _cacheSizeMb = MutableStateFlow(0f)
+    val cacheSizeMb: StateFlow<Float> = _cacheSizeMb.asStateFlow()
+
     private val _snackbarMessages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val snackbarMessages: SharedFlow<String> = _snackbarMessages.asSharedFlow()
 
     private val tapTimestamps = ArrayDeque<Long>()
+
+    init {
+        engine.advancedSettings = _advancedSettings.value
+        _mixerState.update { it.copy(qualityMode = _advancedSettings.value.defaultQuality) }
+        refreshCacheSize()
+    }
 
     fun selectTab(tab: StudioTab) {
         _selectedTab.value = tab
     }
 
     fun toggleDarkTheme() {
-        _darkTheme.value = !_darkTheme.value
+        val next = !_darkTheme.value
+        _darkTheme.value = next
+        updateAdvancedSettings { it.copy(darkTheme = next) }
+    }
+
+    fun setShowSettingsSheet(show: Boolean) {
+        if (show) refreshCacheSize()
+        _showSettingsSheet.value = show
+    }
+
+    fun updateLatencyMode(mode: AudioLatencyMode) = updateAdvancedSettings { it.copy(latencyMode = mode) }
+    fun updateDefaultQuality(q: ProcessingQuality) {
+        updateAdvancedSettings { it.copy(defaultQuality = q) }
+        _mixerState.update { it.copy(qualityMode = q) }
+    }
+    fun updateVisualizerStyle(style: VisualizerStyle) = updateAdvancedSettings { it.copy(visualizerStyle = style) }
+    fun updateKeepScreenOn(enabled: Boolean) = updateAdvancedSettings { it.copy(keepScreenOn = enabled) }
+    fun updateOverdubLatencyComp(ms: Int) = updateAdvancedSettings { it.copy(overdubLatencyCompMs = ms.coerceIn(-120, 120)) }
+    fun updateAutoNormalizeRecording(enabled: Boolean) = updateAdvancedSettings { it.copy(autoNormalizeRecording = enabled) }
+    fun updateLimiterCeiling(db: Float) = updateAdvancedSettings { it.copy(limiterCeilingDb = db.coerceIn(-3.0f, -0.1f)) }
+
+    private fun updateAdvancedSettings(transform: (AdvancedSettings) -> AdvancedSettings) {
+        val updated = transform(_advancedSettings.value)
+        _advancedSettings.value = updated
+        _darkTheme.value = updated.darkTheme
+        engine.advancedSettings = updated
+        settingsStore.save(updated)
+    }
+
+    private fun refreshCacheSize() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val bytes = (studioDir.listFiles()?.sumOf { it.length() } ?: 0L) +
+                (exportDir.listFiles()?.sumOf { it.length() } ?: 0L)
+            _cacheSizeMb.value = bytes / (1024f * 1024f)
+        }
+    }
+
+    fun clearOrphanedCacheFiles() {
+        viewModelScope.launch {
+            val activePaths = allTracks.value.map { it.filePath }.toSet()
+            var removed = 0
+            withContext(Dispatchers.IO) {
+                listOf(studioDir, exportDir).forEach { dir ->
+                    dir.listFiles()?.forEach { file ->
+                        if (file.absolutePath !in activePaths && file.delete()) {
+                            removed++
+                        }
+                    }
+                }
+            }
+            refreshCacheSize()
+            _snackbarMessages.emit(
+                if (removed > 0) "נוקו $removed קבצי מטמון זמניים" else "אין קבצי מטמון מיותרים לניקוי"
+            )
+        }
     }
 
     fun updateSearchQuery(query: String) {
@@ -249,6 +329,18 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun renameTrack(track: TrackEntity, newTitle: String) {
+        val cleaned = newTitle.trim()
+        if (cleaned.isBlank()) return
+        viewModelScope.launch {
+            repository.renameTrack(track.id, cleaned)
+            if (_activeTrackId.value == track.id) {
+                _activeTrackTitle.value = cleaned
+            }
+            _snackbarMessages.emit("שם הרצועה עודכן ל-\"$cleaned\"")
+        }
+    }
+
     fun deleteTrack(track: TrackEntity) {
         viewModelScope.launch {
             if (_activeTrackId.value == track.id) {
@@ -258,6 +350,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 runCatching { File(track.filePath).delete() }
             }
             repository.deleteTrack(track.id)
+            refreshCacheSize()
             _snackbarMessages.emit("הרצועה \"${track.title}\" נמחקה")
         }
     }
@@ -267,11 +360,30 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         _activeTrackId.value = track.id
         _activeTrackTitle.value = track.title
         _activeTrackFormat.value = track.format
-        _mixerState.value = MixerState()
+        _mixerState.value = MixerState(qualityMode = _advancedSettings.value.defaultQuality)
         _pitchTempoState.value = PitchTempoState()
         _rehearsalState.update { it.copy(hasOverdubTrack = false, isRecordingOverdub = false, loopEnabled = false) }
+        _analysisResult.value = AudioAnalysisResult()
         syncEngineStates()
         refreshWaveformState()
+        refreshCacheSize()
+        analyzeCurrentTrack()
+    }
+
+    fun analyzeCurrentTrack() {
+        val buf = engine.currentBuffer ?: return
+        viewModelScope.launch {
+            val result = AudioAnalyzer.analyze(buf)
+            _analysisResult.value = result
+        }
+    }
+
+    fun syncMetronomeToDetectedBpm() {
+        val bpm = _analysisResult.value.detectedBpm
+        if (bpm in 40..240) {
+            updateBpm(bpm)
+            viewModelScope.launch { _snackbarMessages.emit("המטרונום סונכרן לקצב השיר ($bpm BPM)") }
+        }
     }
 
     // --- Transport Controls ---
@@ -476,6 +588,16 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         syncEngineStates()
     }
 
+    fun updateStereoWidth(width: Float) {
+        _eqFxState.update { it.copy(stereoWidth = width.coerceIn(0f, 1.6f)) }
+        syncEngineStates()
+    }
+
+    fun toggleHighPass80Hz(enabled: Boolean) {
+        _eqFxState.update { it.copy(highPass80Hz = enabled) }
+        syncEngineStates()
+    }
+
     // --- Waveform Editor ---
 
     fun updateZoom(zoom: Float) {
@@ -521,17 +643,33 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun updateFadeDuration(seconds: Float) {
+        _waveformState.update { it.copy(fadeDurationSec = seconds.coerceIn(0.5f, 8.0f)) }
+    }
+
     fun applyFadeIn() {
-        if (engine.applyFadeIn(2.0f)) {
+        val dur = _waveformState.value.fadeDurationSec
+        if (engine.applyFadeIn(dur)) {
             refreshWaveformState()
-            viewModelScope.launch { _snackbarMessages.emit("נוספה כניסה הדרגתית (Fade In)") }
+            viewModelScope.launch { _snackbarMessages.emit("נוספה כניסה הדרגתית (${dur}s Fade In)") }
         }
     }
 
     fun applyFadeOut() {
-        if (engine.applyFadeOut(2.5f)) {
+        val dur = _waveformState.value.fadeDurationSec
+        if (engine.applyFadeOut(dur)) {
             refreshWaveformState()
-            viewModelScope.launch { _snackbarMessages.emit("נוספה דעיכת סיום הדרגתית (Fade Out)") }
+            viewModelScope.launch { _snackbarMessages.emit("נוספה דעיכת סיום (${dur}s Fade Out)") }
+        }
+    }
+
+    fun autoTrimSilence() {
+        if (engine.autoTrimSilence()) {
+            _waveformState.update { it.copy(selectionStartRatio = 0.05f, selectionEndRatio = 0.95f) }
+            refreshWaveformState()
+            viewModelScope.launch { _snackbarMessages.emit("השקט מהתחלה ומהסוף הוסר אוטומטית") }
+        } else {
+            viewModelScope.launch { _snackbarMessages.emit("לא נמצא שקט עודף לחיתוך") }
         }
     }
 
@@ -725,7 +863,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     format = format,
                     bitrate = bitrate,
                     internalArchiveFile = archiveFile,
-                    externalUri = externalUri
+                    externalUri = externalUri,
+                    limiterCeilingDb = _advancedSettings.value.limiterCeilingDb
                 ) { p ->
                     _processing.value = ProcessingProgress(true, "מעבד ומקודד קובץ סופי...", p)
                 }

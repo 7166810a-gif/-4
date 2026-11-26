@@ -63,6 +63,7 @@ import androidx.core.content.ContextCompat
 import com.example.R
 import com.example.data.PlaybackUiState
 import com.example.data.RehearsalState
+import com.example.data.VisualizerStyle
 import com.example.ui.components.RealtimeWaveformCanvas
 import com.example.ui.components.formatTimeMs
 import com.example.ui.theme.EmeraldDrum
@@ -76,6 +77,7 @@ fun RehearsalScreen(
     hasAudio: Boolean,
     playback: PlaybackUiState,
     rehearsal: RehearsalState,
+    visualizerStyle: VisualizerStyle,
     liveSamplesProvider: () -> FloatArray,
     onSetLoopA: () -> Unit,
     onSetLoopB: () -> Unit,
@@ -320,6 +322,7 @@ fun RehearsalScreen(
                 RealtimeWaveformCanvas(
                     samplesProvider = liveSamplesProvider,
                     isActive = playback.isPlaying || rehearsal.isRecordingOverdub,
+                    style = visualizerStyle,
                     labelHe = "גל קול חי (מיקרופון / מיקס)"
                 )
 

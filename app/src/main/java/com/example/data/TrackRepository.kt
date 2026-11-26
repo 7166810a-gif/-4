@@ -11,6 +11,10 @@ class TrackRepository(private val trackDao: TrackDao) {
         trackDao.updateTrackMetadata(id, separated, durationMs)
     }
 
+    suspend fun renameTrack(id: Long, newTitle: String) {
+        trackDao.renameTrack(id, newTitle)
+    }
+
     suspend fun deleteTrack(id: Long) {
         trackDao.deleteTrackById(id)
     }

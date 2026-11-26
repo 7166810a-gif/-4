@@ -17,6 +17,9 @@ interface TrackDao {
     @Query("UPDATE studio_tracks SET stemsSeparated = :separated, durationMs = :durationMs WHERE id = :id")
     suspend fun updateTrackMetadata(id: Long, separated: Boolean, durationMs: Long)
 
+    @Query("UPDATE studio_tracks SET title = :title WHERE id = :id")
+    suspend fun renameTrack(id: Long, title: String)
+
     @Query("DELETE FROM studio_tracks WHERE id = :id")
     suspend fun deleteTrackById(id: Long)
 }

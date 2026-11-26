@@ -7,6 +7,7 @@ import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.Build
+import com.example.data.AdvancedSettings
 import com.example.data.AudioBuffer
 import com.example.data.EqAndFxState
 import com.example.data.MixerState
@@ -45,6 +46,7 @@ class AudioEngineController {
     @Volatile var pitchTempoState: PitchTempoState = PitchTempoState()
     @Volatile var eqFxState: EqAndFxState = EqAndFxState()
     @Volatile var rehearsalState: RehearsalState = RehearsalState()
+    @Volatile var advancedSettings: AdvancedSettings = AdvancedSettings()
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
@@ -57,6 +59,9 @@ class AudioEngineController {
 
     private val _micLevel = MutableStateFlow(0f)
     val micLevel: StateFlow<Float> = _micLevel.asStateFlow()
+
+    private val _stereoPeaks = MutableStateFlow(0f to 0f)
+    val stereoPeaks: StateFlow<Pair<Float, Float>> = _stereoPeaks.asStateFlow()
 
     companion object {
         const val LIVE_WAVEFORM_SIZE = 72
@@ -134,6 +139,7 @@ class AudioEngineController {
         playbackJob?.cancel()
         playbackJob = null
         _liveWaveform.value = liveZeroBuf
+        _stereoPeaks.value = 0f to 0f
     }
 
     fun stopPlayback() {
@@ -143,16 +149,24 @@ class AudioEngineController {
         playFrameCursor = 0
         _positionMs.value = 0L
         _liveWaveform.value = liveZeroBuf
+        _stereoPeaks.value = 0f to 0f
     }
 
     private fun publishLiveWaveform(left: FloatArray, right: FloatArray, frames: Int) {
         if (frames <= 0) return
         val target = if (_liveWaveform.value === liveBufA) liveBufB else liveBufA
         val step = max(1, frames / LIVE_WAVEFORM_SIZE)
+        var peakL = 0f
+        var peakR = 0f
         for (i in 0 until LIVE_WAVEFORM_SIZE) {
             val idx = (i * step).coerceAtMost(frames - 1)
-            target[i] = (0.5f * (left[idx] + right[idx])).coerceIn(-1f, 1f)
+            val l = left[idx]
+            val r = right[idx]
+            if (abs(l) > peakL) peakL = abs(l)
+            if (abs(r) > peakR) peakR = abs(r)
+            target[i] = (0.5f * (l + r)).coerceIn(-1f, 1f)
         }
+        _stereoPeaks.value = peakL.coerceIn(0f, 1f) to peakR.coerceIn(0f, 1f)
         _liveWaveform.value = target
     }
 
@@ -175,6 +189,7 @@ class AudioEngineController {
             AudioFormat.ENCODING_PCM_16BIT
         ).coerceAtLeast(8192)
 
+        val mult = advancedSettings.latencyMode.bufferMultiplier.coerceIn(1, 4)
         val audioTrackBuilder = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -189,7 +204,7 @@ class AudioEngineController {
                     .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                     .build()
             )
-            .setBufferSizeInBytes(minBufBytes * 2)
+            .setBufferSizeInBytes(minBufBytes * mult)
             .setTransferMode(AudioTrack.MODE_STREAM)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -304,8 +319,8 @@ class AudioEngineController {
 
                 var produced = sonic.readStereo(outL, outR, outL.size)
                 while (produced > 0) {
-                    // 3. Real-time EQ + Reverb + Delay + Auto-Normalize Limiter
-                    fxProcessor.processBlock(outL, outR, produced, eqFxState)
+                    // 3. Real-time EQ + Stereo Width + Reverb + Delay + Auto-Normalize Limiter
+                    fxProcessor.processBlock(outL, outR, produced, eqFxState, advancedSettings.limiterCeilingDb)
 
                     // 4. Real-time Metronome overlay (pitch-independent steady BPM click)
                     if (reh.metronomeEnabled) {
@@ -320,6 +335,15 @@ class AudioEngineController {
 
                 if (reh.loopEnabled && playFrameCursor >= loopEndFrame) {
                     playFrameCursor = loopStartFrame
+                } else if (!reh.loopEnabled && playFrameCursor >= totalFrames) {
+                    sonic.flush()
+                    var flushed = sonic.readStereo(outL, outR, outL.size)
+                    while (flushed > 0) {
+                        fxProcessor.processBlock(outL, outR, flushed, eqFxState, advancedSettings.limiterCeilingDb)
+                        writeShorts(audioTrack, outL, outR, flushed, pcmShorts)
+                        flushed = sonic.readStereo(outL, outR, outL.size)
+                    }
+                    break
                 }
             }
         } finally {
@@ -440,16 +464,35 @@ class AudioEngineController {
 
                 val totalRecorded = recordedChunks.sumOf { it.size }
                 if (totalRecorded > 0) {
+                    val adv = advancedSettings
+                    // Latency compensation shifts recorded samples backward/forward by configured ms
+                    val compFrames = (adv.overdubLatencyCompMs * sr) / 1000
                     val backingFrames = currentBuffer?.frameCount ?: 0
-                    val totalOut = max(backingFrames, startFrame + totalRecorded)
+                    val rawAlignedStart = (startFrame - compFrames).coerceAtLeast(0)
+                    val totalOut = max(backingFrames, rawAlignedStart + totalRecorded)
                     val odL = FloatArray(totalOut)
                     val odR = FloatArray(totalOut)
-                    var writeIdx = startFrame
+
+                    var peak = 0f
+                    if (adv.autoNormalizeRecording) {
+                        for (c in recordedChunks) {
+                            for (s in c) {
+                                val a = abs(s)
+                                if (a > peak) peak = a
+                            }
+                        }
+                    }
+                    val normGain = if (adv.autoNormalizeRecording && peak in 0.01f..0.75f) {
+                        (0.85f / peak).coerceAtMost(3.5f)
+                    } else 1f
+
+                    var writeIdx = rawAlignedStart
                     for (c in recordedChunks) {
                         for (s in c) {
                             if (writeIdx < totalOut) {
-                                odL[writeIdx] = s
-                                odR[writeIdx] = s
+                                val v = (s * normGain).coerceIn(-0.98f, 0.98f)
+                                odL[writeIdx] = v
+                                odR[writeIdx] = v
                                 writeIdx++
                             }
                         }
@@ -619,6 +662,24 @@ class AudioEngineController {
         // Merged track invalidates old stem cache until re-separated
         applyEditedBuffer(AudioBuffer(buf.sampleRate, outL, outR), null)
         return true
+    }
+
+    fun autoTrimSilence(thresholdDb: Float = -44f): Boolean {
+        val buf = currentBuffer ?: return false
+        val threshold = Math.pow(10.0, thresholdDb / 20.0).toFloat()
+        val n = buf.frameCount
+        var start = 0
+        while (start < n - 1 && abs(buf.left[start]) < threshold && abs(buf.right[start]) < threshold) {
+            start++
+        }
+        var end = n - 1
+        while (end > start + 4410 && abs(buf.left[end]) < threshold && abs(buf.right[end]) < threshold) {
+            end--
+        }
+        start = (start - 440).coerceAtLeast(0)
+        end = (end + 880).coerceAtMost(n)
+        if (end - start < 4410 || (start == 0 && end == n)) return false
+        return trimSelection(start.toFloat() / n, end.toFloat() / n)
     }
 
     fun undo(): Boolean {

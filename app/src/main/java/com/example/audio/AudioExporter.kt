@@ -36,6 +36,7 @@ object AudioExporter {
         bitrate: ExportBitrate,
         internalArchiveFile: File,
         externalUri: Uri?,
+        limiterCeilingDb: Float = -0.5f,
         onProgress: (Float) -> Unit
     ): AudioBuffer = withContext(Dispatchers.Default) {
         onProgress(0.05f)
@@ -133,9 +134,9 @@ object AudioExporter {
 
         onProgress(0.60f)
 
-        // 3. Apply Studio EQ + Reverb + Delay + Auto-Normalize Limiter
+        // 3. Apply Studio EQ + Stereo Width + Reverb + Delay + Auto-Normalize Limiter
         val fxProc = AudioEffectsProcessor(sourceBuffer.sampleRate)
-        fxProc.processBlock(finalL, finalR, totalOutFrames, fx)
+        fxProc.processBlock(finalL, finalR, totalOutFrames, fx, limiterCeilingDb)
 
         val renderedBuffer = AudioBuffer(sourceBuffer.sampleRate, finalL, finalR)
         onProgress(0.72f)
