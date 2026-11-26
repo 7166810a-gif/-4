@@ -17,6 +17,7 @@ import com.example.data.StemSet
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -50,6 +51,9 @@ class AudioEngineController {
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
+
+    private val _playbackError = MutableStateFlow<String?>(null)
+    val playbackError: StateFlow<String?> = _playbackError.asStateFlow()
 
     private val _positionMs = MutableStateFlow(0L)
     val positionMs: StateFlow<Long> = _positionMs.asStateFlow()
@@ -127,10 +131,21 @@ class AudioEngineController {
         if (playFrameCursor >= buf.frameCount - 64) {
             playFrameCursor = 0
         }
+        _playbackError.value = null
         _isPlaying.value = true
         playbackJob?.cancel()
         playbackJob = scope.launch {
-            runPlaybackLoop(withOptionalCountIn && rehearsalState.metronomeEnabled && rehearsalState.countInEnabled)
+            try {
+                runPlaybackLoop(withOptionalCountIn && rehearsalState.metronomeEnabled && rehearsalState.countInEnabled)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _playbackError.value = error.message?.takeIf { it.isNotBlank() }
+                    ?: "לא ניתן להפעיל את קובץ השמע"
+                _isPlaying.value = false
+                _stereoPeaks.value = 0f to 0f
+                _liveWaveform.value = liveZeroBuf
+            }
         }
     }
 
@@ -225,8 +240,11 @@ class AudioEngineController {
         var metronomePhaseSample = 0L
         var countInRemainingSamples = if (doCountIn) ((60.0 / rehearsalState.bpm.coerceIn(40, 240)) * 4 * sr).toLong() else 0L
 
-        audioTrack.play()
         try {
+            if (audioTrack.state != AudioTrack.STATE_INITIALIZED) {
+                error("מכשיר השמע לא הצליח לאתחל את הנגן")
+            }
+            audioTrack.play()
             while (scope.isActive && _isPlaying.value) {
                 val buf = currentBuffer ?: break
                 val totalFrames = buf.frameCount
@@ -247,7 +265,9 @@ class AudioEngineController {
                 // Check A-B Loop boundaries
                 val reh = rehearsalState
                 val loopStartFrame = if (reh.loopEnabled) (reh.loopARatio * totalFrames).toInt().coerceIn(0, totalFrames - 1) else 0
-                val loopEndFrame = if (reh.loopEnabled) (reh.loopBRatio * totalFrames).toInt().coerceIn(loopStartFrame + 1024, totalFrames) else totalFrames
+                val loopEndFrame = if (reh.loopEnabled) {
+                    (reh.loopBRatio * totalFrames).toInt().coerceIn(loopStartFrame + 1, totalFrames)
+                } else totalFrames
 
                 if (reh.loopEnabled && (playFrameCursor < loopStartFrame || playFrameCursor >= loopEndFrame)) {
                     playFrameCursor = loopStartFrame
@@ -399,7 +419,13 @@ class AudioEngineController {
             shortScratch[sIdx++] = (l[i].coerceIn(-1f, 1f) * 32767f).toInt().toShort()
             shortScratch[sIdx++] = (r[i].coerceIn(-1f, 1f) * 32767f).toInt().toShort()
         }
-        track.write(shortScratch, 0, sIdx)
+        var written = 0
+        while (written < sIdx) {
+            val count = track.write(shortScratch, written, sIdx - written)
+            if (count < 0) error("שגיאה בהעברת נתוני שמע לרמקול (קוד $count)")
+            if (count == 0) continue
+            written += count
+        }
     }
 
     // --- Overdub / Standalone Microphone Recording ---
