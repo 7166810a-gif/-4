@@ -172,60 +172,79 @@ object AudioDecoder {
     }
 
     private fun decodeWithMediaExtractor(context: Context, uri: Uri): AudioBuffer {
-        val extractor = MediaExtractor()
-        context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-            extractor.setDataSource(pfd.fileDescriptor)
-        } ?: error("לא ניתן לפתוח את קובץ השמע")
-        return extractAndDecode(extractor)
+        val descriptor = context.contentResolver.openFileDescriptor(uri, "r")
+            ?: error("לא ניתן לפתוח את קובץ השמע")
+
+        // Keep the descriptor open for the entire decode. MediaExtractor reads lazily from it.
+        return descriptor.use { pfd ->
+            withMediaExtractor { extractor ->
+                extractor.setDataSource(pfd.fileDescriptor)
+                extractAndDecode(extractor)
+            }
+        }
     }
 
-    private fun decodeFileWithMediaExtractor(file: File): AudioBuffer {
+    private fun decodeFileWithMediaExtractor(file: File): AudioBuffer =
+        withMediaExtractor { extractor ->
+            extractor.setDataSource(file.absolutePath)
+            extractAndDecode(extractor)
+        }
+
+    private inline fun <T> withMediaExtractor(block: (MediaExtractor) -> T): T {
         val extractor = MediaExtractor()
-        extractor.setDataSource(file.absolutePath)
-        return extractAndDecode(extractor)
+        return try {
+            block(extractor)
+        } finally {
+            runCatching { extractor.release() }
+        }
     }
 
     private fun extractAndDecode(extractor: MediaExtractor): AudioBuffer {
         var audioTrackIdx = -1
         var format: MediaFormat? = null
         for (i in 0 until extractor.trackCount) {
-            val f = extractor.getTrackFormat(i)
-            val mime = f.getString(MediaFormat.KEY_MIME) ?: ""
+            val trackFormat = extractor.getTrackFormat(i)
+            val mime = trackFormat.getString(MediaFormat.KEY_MIME).orEmpty()
             if (mime.startsWith("audio/")) {
                 audioTrackIdx = i
-                format = f
+                format = trackFormat
                 break
             }
         }
         if (audioTrackIdx < 0 || format == null) {
-            extractor.release()
             error("הקובץ אינו מכיל ערוץ שמע תקין")
         }
 
         extractor.selectTrack(audioTrackIdx)
-        val mime = format.getString(MediaFormat.KEY_MIME)!!
+        val mime = format.getString(MediaFormat.KEY_MIME)
+            ?: error("פורמט השמע אינו מזוהה")
         var sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
         var channelCount = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
 
         val codec = MediaCodec.createDecoderByType(mime)
-        codec.configure(format, null, null, 0)
-        codec.start()
-
         val pcmChunks = ArrayList<ShortArray>()
         var totalShorts = 0
         val bufferInfo = MediaCodec.BufferInfo()
         var sawInputEOS = false
         var sawOutputEOS = false
+        var codecStarted = false
 
         try {
+            codec.configure(format, null, null, 0)
+            codec.start()
+            codecStarted = true
+
             while (!sawOutputEOS) {
                 if (!sawInputEOS) {
                     val inIdx = codec.dequeueInputBuffer(10_000)
                     if (inIdx >= 0) {
-                        val inBuf = codec.getInputBuffer(inIdx)!!
+                        val inBuf = codec.getInputBuffer(inIdx)
+                            ?: error("מפענח השמע לא סיפק מאגר קלט")
                         val sampleSize = extractor.readSampleData(inBuf, 0)
                         if (sampleSize < 0) {
-                            codec.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            codec.queueInputBuffer(
+                                inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                            )
                             sawInputEOS = true
                         } else {
                             codec.queueInputBuffer(inIdx, 0, sampleSize, extractor.sampleTime, 0)
@@ -237,52 +256,55 @@ object AudioDecoder {
                 val outIdx = codec.dequeueOutputBuffer(bufferInfo, 10_000)
                 when {
                     outIdx >= 0 -> {
-                        val outBuf = codec.getOutputBuffer(outIdx)
-                        if (outBuf != null && bufferInfo.size > 0) {
-                            outBuf.position(bufferInfo.offset)
-                            outBuf.limit(bufferInfo.offset + bufferInfo.size)
-                            val shortBuf = outBuf.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-                            val shorts = ShortArray(shortBuf.remaining())
-                            shortBuf.get(shorts)
-                            pcmChunks.add(shorts)
-                            totalShorts += shorts.size
+                        try {
+                            val outBuf = codec.getOutputBuffer(outIdx)
+                            if (outBuf != null && bufferInfo.size > 0) {
+                                outBuf.position(bufferInfo.offset)
+                                outBuf.limit(bufferInfo.offset + bufferInfo.size)
+                                val shortBuf = outBuf.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+                                val shorts = ShortArray(shortBuf.remaining())
+                                shortBuf.get(shorts)
+                                pcmChunks.add(shorts)
+                                totalShorts += shorts.size
+                            }
+                        } finally {
+                            codec.releaseOutputBuffer(outIdx, false)
                         }
-                        codec.releaseOutputBuffer(outIdx, false)
                         if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                             sawOutputEOS = true
                         }
                     }
                     outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                        val outFmt = codec.outputFormat
-                        if (outFmt.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
-                            sampleRate = outFmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                        val outputFormat = codec.outputFormat
+                        if (outputFormat.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                            sampleRate = outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                         }
-                        if (outFmt.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
-                            channelCount = outFmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                        if (outputFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
+                            channelCount = outputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
                         }
                     }
                 }
             }
         } finally {
-            codec.stop()
-            codec.release()
-            extractor.release()
+            if (codecStarted) runCatching { codec.stop() }
+            runCatching { codec.release() }
         }
 
-        val ch = channelCount.coerceAtLeast(1)
-        val frames = totalShorts / ch
+        val channels = channelCount.coerceAtLeast(1)
+        val frames = totalShorts / channels
+        if (frames <= 0) error("לא נמצאו נתוני שמע בקובץ")
         val left = FloatArray(frames)
         val right = FloatArray(frames)
         var frameIdx = 0
         for (chunk in pcmChunks) {
             var i = 0
-            while (i + ch <= chunk.size && frameIdx < frames) {
+            while (i + channels <= chunk.size && frameIdx < frames) {
                 val l = chunk[i] / 32768f
-                val r = if (ch >= 2) chunk[i + 1] / 32768f else l
+                val r = if (channels >= 2) chunk[i + 1] / 32768f else l
                 left[frameIdx] = l
                 right[frameIdx] = r
                 frameIdx++
-                i += ch
+                i += channels
             }
         }
         return AudioBuffer(sampleRate, left, right)
